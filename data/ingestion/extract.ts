@@ -9,6 +9,7 @@ import { PDFParse } from 'pdf-parse';
 import { repairMojibake } from '../processing/text.js';
 const run = promisify(execFile);
 export const extensions = ['.txt', '.md', '.csv', '.json', '.pdf', '.docx', '.xlsx'];
+export type ExtractedDocument = { text: string; pages?: Array<{ page: number; text: string }> };
 function hasMeaningfulPdfText(text: string) {
   return text.replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '').replace(/\s+/g, ' ').trim().length >= 20;
 }
@@ -28,7 +29,7 @@ async function extractPdfWithOcr(buffer: Buffer) {
       const result = await run(tesseract, [directory + '/' + file, 'stdout', '-l', 'por'], { windowsHide: true, maxBuffer: 10 * 1024 * 1024 });
       pages.push(result.stdout);
     }
-    return pages.join('\n');
+    return { text: pages.map((text, index) => `\n\n[[LUMINA_PAGE:${index + 1}]]\n${text}`).join('\n'), pages: pages.map((text, index) => ({ page: index + 1, text })) };
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'ferramenta indisponível';
     throw new Error('OCR indisponível. Instale/configure Poppler e Tesseract. ' + detail.slice(0, 180));
@@ -36,7 +37,7 @@ async function extractPdfWithOcr(buffer: Buffer) {
     await rm(directory, { recursive: true, force: true });
   }
 }
-export async function extract(name: string, buffer: Buffer): Promise<string> {
+export async function extract(name: string, buffer: Buffer): Promise<ExtractedDocument> {
   const ext = extname(name).toLowerCase();
   if (!extensions.includes(ext)) throw new Error('Formato não suportado. Use TXT, MD, CSV, JSON, PDF, DOCX ou XLSX.');
   if (ext === '.pdf') {
@@ -44,7 +45,10 @@ export async function extract(name: string, buffer: Buffer): Promise<string> {
     const parser = new PDFParse({ data: new Uint8Array(buffer) });
     try {
       const result = await parser.getText();
-      if (hasMeaningfulPdfText(result.text)) return repairMojibake(result.text);
+      if (hasMeaningfulPdfText(result.text)) {
+        const pages = result.pages.map(page => ({ page: page.num, text: repairMojibake(page.text) }));
+        return { text: pages.map(page => `\n\n[[LUMINA_PAGE:${page.page}]]\n${page.text}`).join('\n'), pages };
+      }
     } finally { await parser.destroy(); }
     return extractPdfWithOcr(buffer);
   }
@@ -59,7 +63,7 @@ export async function extract(name: string, buffer: Buffer): Promise<string> {
       }
     }
     if (!entries) throw new Error('Índice do arquivo Office inválido.');
-    if (ext === '.docx') return repairMojibake((await mammoth.extractRawText({ buffer })).value);
+    if (ext === '.docx') return { text: repairMojibake((await mammoth.extractRawText({ buffer })).value) };
     const book = new ExcelJS.Workbook();
     await book.xlsx.load(buffer as any);
     const rows: string[] = [];
@@ -75,13 +79,13 @@ export async function extract(name: string, buffer: Buffer): Promise<string> {
         return String(value ?? '');
       }).join(' | ')); });
     });
-    return rows.join('\n');
+    return { text: rows.join('\n') };
   }
   let text: string;
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(buffer); }
   catch {
     text = new TextDecoder('windows-1252').decode(buffer);
   }
-    if (ext === '.json') JSON.parse(text);
-  return repairMojibake(text);
+  if (ext === '.json') JSON.parse(text);
+  return { text: repairMojibake(text) };
 }

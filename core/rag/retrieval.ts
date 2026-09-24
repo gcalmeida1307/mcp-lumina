@@ -36,6 +36,36 @@ export function diversify<T extends { chunk: Chunk; score: number }>(sorted: T[]
   }
   return [...chosen, ...deferred].slice(0, limit);
 }
+export function mergeEvidence(batches: Evidence[][], limit = 10) {
+  const byId = new Map<string, Evidence>();
+  for (const batch of batches) for (const item of batch) {
+    const previous = byId.get(item.id);
+    if (!previous || item.score > previous.score) byId.set(item.id, item);
+  }
+  const queues = new Map<string, Evidence[]>();
+  for (const item of [...byId.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))) {
+    const queue = queues.get(item.documentId) ?? [];
+    queue.push(item); queues.set(item.documentId, queue);
+  }
+  const documents = [...queues.keys()].sort((a, b) => (queues.get(b)![0].score - queues.get(a)![0].score) || a.localeCompare(b));
+  const selected: Evidence[] = [];
+  for (const documentId of documents) {
+    const item = queues.get(documentId)!.shift();
+    if (item) selected.push(item);
+    if (selected.length >= limit) return selected;
+  }
+  for (let offset = 0; selected.length < limit; offset++) {
+    let added = false;
+    for (const documentId of documents) {
+      const item = queues.get(documentId)!.shift();
+      if (!item) continue;
+      selected.push(item); added = true;
+      if (selected.length >= limit) break;
+    }
+    if (!added || offset > limit) break;
+  }
+  return selected;
+}
 
 /** Keep lexical relevance on its own scale: partially embedded documents must not win merely by appearing in two rankings. */
 export function rankCandidates(query: string, chunks: Chunk[], vector?: number[], model?: string) {
@@ -63,7 +93,7 @@ export async function retrieve(store: Store, query: string, domain: string): Pro
       catch { /* Text retrieval remains available during vector service failure. */ }
     }
     return diversify(rankCandidates(query, chunks, vector, config.EMBEDDING_MODEL)).map(({ chunk, score }) => ({
-      id: chunk.id, documentId: chunk.documentId, title: chunk.title, text: chunk.text, chunk: chunk.index + 1, score, sourceUrl: chunk.sourceUrl, capturedAt: chunk.capturedAt
+      id: chunk.id, documentId: chunk.documentId, title: chunk.title, text: chunk.text, chunk: chunk.index + 1, page: chunk.page, score, sourceUrl: chunk.sourceUrl, capturedAt: chunk.capturedAt
     }));
   });
 }

@@ -56,7 +56,7 @@ export class Ingestion {
       d.objectKey = await saveObject(d.id, content);
       await complete(stage, 'Arquivo recebido e armazenado.');
       stage = 'Extração';
-      let text = await extract(d.name, content);
+      let text = (await extract(d.name, content)).text;
       const meaningfulText = text.replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '').replace(/\s+/g, ' ').trim();
       if (!meaningfulText) throw new Error('Sem texto extraível. Este PDF parece digitalizado e precisa de OCR antes de ser consultado.');
       await complete(stage, 'Texto extraído do arquivo.');
@@ -67,14 +67,17 @@ export class Ingestion {
       stage = 'Normalização'; text = normalize(text);
       await complete(stage, 'Espaços, quebras de linha e Unicode normalizados.');
       stage = 'Enriquecimento';
-      const pieces = chunkText(text);
+      const pieces = chunkText(text).map(piece => {
+        const page = Number(piece.match(/\[\[LUMINA_PAGE:(\d+)\]\]/)?.[1]);
+        return { text: piece.replace(/\[\[LUMINA_PAGE:\d+\]\]\n?/g, '').trim(), page: Number.isInteger(page) && page > 0 ? page : undefined };
+      });
       if (pieces.length > config.MAX_DOCUMENT_CHUNKS) throw new Error('Documento excede ' + config.MAX_DOCUMENT_CHUNKS.toLocaleString('pt-BR') + ' trechos.');
       await complete(stage, 'Metadados de domínio, hash, origem e ' + pieces.length + ' trechos.');
       stage = 'Indexação';
       // Chunks are inserted immediately without waiting for embeddings, so the document
       // stays fast to publish; semantic vectors are filled in afterwards in the background.
       for (let i = 0; i < pieces.length; i++) {
-        await this.store.addChunk({ id: d.id + ':' + i, documentId: d.id, domain: d.domain, title: d.name, index: i, text: pieces[i], sourceUrl: d.sourceUrl, capturedAt: d.capturedAt });
+        await this.store.addChunk({ id: d.id + ':' + i, documentId: d.id, domain: d.domain, title: d.name, index: i, text: pieces[i].text, page: pieces[i].page, sourceUrl: d.sourceUrl, capturedAt: d.capturedAt });
       }
       d.chunks = pieces.length;
       await complete(stage, embeddingsEnabled() ? 'Índice lexical disponível. Embeddings semânticos serão calculados em segundo plano.' : 'Índice lexical disponível. Embeddings não configurados.');

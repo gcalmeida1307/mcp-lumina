@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Chunk, Run } from '../core/types.js';
 import type { Store } from '../data/storage/database.js';
-import { rankCandidates, diversify, retrieve } from '../core/rag/retrieval.js';
+import { mergeEvidence, rankCandidates, diversify, retrieve } from '../core/rag/retrieval.js';
 import { contextualizeQuestion } from '../core/orchestrator/context.js';
 import { config } from '../gateway/config.js';
 import { orchestrate } from '../core/orchestrator/graph.js';
@@ -15,6 +15,15 @@ const chunks: Chunk[] = [
 ];
 const history = [{ question: 'Pode falar sobre ética e prontuário?', answer: 'Ética e prontuário. '.repeat(100) }];
 const fakeStore = () => ({ cacheNamespace: crypto.randomUUID(), revision: async () => 1, chunks: async (domain: string) => chunks.filter(chunk => chunk.domain === domain), saveRun: async (_run: Run) => {}, audit: async () => {} } as unknown as Store);
+const evidence = (id: string, documentId: string, score: number) => ({ id, documentId, title: documentId, text: id, chunk: 1, score });
+
+test('comparative evidence keeps both documents before filling the result limit', () => {
+  const result = mergeEvidence([
+    [evidence('cct-1', 'cct', 1), evidence('cct-2', 'cct', .99), evidence('cct-3', 'cct', .98)],
+    [evidence('vade-1', 'vade', .4)]
+  ], 3);
+  assert.deepEqual(result.map(item => item.documentId), ['cct', 'vade', 'cct']);
+});
 
 test('topic switch retrieves unembedded flu documents, not old fully embedded ethics', () => {
   const query = contextualizeQuestion('Você não consegue falar sobre a gripe?', history);

@@ -6,8 +6,9 @@ export type DocumentRecord = {
   error?: string; embeddingModel?: string; objectKey?: string;
   sourceUrl?: string; capturedAt?: string; webLinks?: string[];
 };
-export type Chunk = { id: string; documentId: string; domain: string; title: string; index: number; text: string; vector?: number[]; embeddingModel?: string; sourceUrl?: string; capturedAt?: string };
-export type Evidence = { id: string; documentId: string; title: string; text: string; chunk: number; score: number; sourceUrl?: string; capturedAt?: string };
+export type Chunk = { id: string; documentId: string; domain: string; title: string; index: number; text: string; page?: number; vector?: number[]; embeddingModel?: string; sourceUrl?: string; capturedAt?: string };
+export type Evidence = { id: string; documentId: string; title: string; text: string; chunk: number; page?: number; score: number; sourceUrl?: string; capturedAt?: string };
+export type ComparativeFinding = { leftCitation: number; rightCitation: number; relation: string; condition: string; conclusion: string };
 export type TraceStep = { name: string; detail: string; ms: number };
 export type ConversationTurn = { question: string; answer: string };
 export type Run = {
