@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { crawlWebsite, extractPage } from '../data/ingestion/web-crawler.js';
-import { publicAddress, pageUrl, fetchPublic } from '../data/ingestion/web-fetch.js';
+import { publicAddress, pageUrl, fetchPublic, WEB_AGENT } from '../data/ingestion/web-fetch.js';
 import type { WebResponse } from '../data/ingestion/web-fetch.js';
 import type { WebImportPage } from '../core/web-import.js';
 
 const response = (body: string, status = 200, headers = {}): WebResponse => ({ status, body: Buffer.from(body), headers: { 'content-type': 'text/html; charset=utf-8', ...headers } });
 const html = (title: string, links = '') => `<html><head><title>${title}</title></head><body><nav>Menu descartado</nav><main><h1>${title}</h1><p>Conteúdo institucional suficiente para indexação e consulta offline, com procedimentos descritos e fontes preservadas.</p>${links}</main><script>executarCodigo()</script></body></html>`;
+test('identifies the crawler while remaining compatible with sites that require a browser user agent', () => {
+  assert.match(WEB_AGENT, /^Mozilla\/5\.0/); assert.match(WEB_AGENT, /LUMINAOfflineBot/);
+});
 test('rejects internal, mapped, loopback, reserved and credential URLs', async () => {
   for (const ip of ['127.0.0.1','10.0.0.1','172.18.1.43','192.168.1.1','169.254.169.254','::1','::ffff:127.0.0.1','fc00::1','0.0.0.0','192.0.2.1']) assert.equal(publicAddress(ip), false, ip);
   assert.equal(publicAddress('8.8.8.8'), true);

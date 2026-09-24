@@ -7,13 +7,13 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "concurrently -k -n api,web \"tsx watch gateway/server.ts\" \"vite --host 127.0.0.1\"",
-    "dev:api": "tsx watch gateway/server.ts",
+    "dev": "concurrently -k -n api,web \"node --use-system-ca node_modules/tsx/dist/cli.mjs watch gateway/server.ts\" \"vite --host 127.0.0.1\"",
+    "dev:api": "node --use-system-ca node_modules/tsx/dist/cli.mjs watch gateway/server.ts",
     "build": "tsc --noEmit && vite build",
-    "start": "tsx gateway/server.ts",
-    "test": "tsx --test tests/*.test.ts",
+    "start": "node --use-system-ca node_modules/tsx/dist/cli.mjs gateway/server.ts",
+    "test": "node --use-system-ca node_modules/tsx/dist/cli.mjs --test tests/*.test.ts",
     "check": "tsc --noEmit",
-    "eval": "tsx core/llmops/evaluate.ts",
+    "eval": "node --use-system-ca node_modules/tsx/dist/cli.mjs core/llmops/evaluate.ts",
     "start:lan": "node scripts/lan-server.mjs"
   },
   "dependencies": {

@@ -4,4 +4,5 @@ if (-not (Test-Path .env)) {
 }
 
 Write-Host 'Iniciando o gateway e o frontend em http://127.0.0.1:5173'
+$env:NODE_USE_SYSTEM_CA = '1'
 npm run dev

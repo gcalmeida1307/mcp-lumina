@@ -5,7 +5,7 @@ import ipaddr from 'ipaddr.js';
 import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 import { MAX_UPLOAD_BYTES } from '../../core/ingestion-limits.js';
 
-export const WEB_AGENT = 'LUMINAOfflineBot';
+export const WEB_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36 LUMINAOfflineBot/1.0';
 export type WebResponse = { status: number; headers: http.IncomingHttpHeaders; body: Buffer };
 export function publicAddress(address: string): boolean {
   try { return ipaddr.process(address).range() === 'unicast'; } catch { return false; }
