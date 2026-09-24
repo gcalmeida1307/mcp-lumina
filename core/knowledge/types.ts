@@ -1,0 +1,5 @@
+export type MapDocument = { id: string; name: string; domain: string; createdAt: string; chunks: number; embeddedChunks: number; sourceUrl?: string; capturedAt?: string };
+export type MapRelation = { source: string; target: string; score: number; method: 'semantic' | 'lexical' };
+export type DomainGraph = { documents: MapDocument[]; relations: MapRelation[]; relatedDocuments?: (MapDocument & { relatedTo: string; score: number; method: MapRelation['method'] })[]; comparedDocuments?: number; total: number; offset: number; limit: number };
+export type DocumentPassages = { document: MapDocument; linkedDocuments?: MapDocument[]; passages: { id: string; index: number; text: string; embedded: boolean }[]; total: number; offset: number; limit: number };
+export type NeuralMap = { embedding: { enabled: boolean; model: string | null; backend: 'local' | 'cloud' | null; dimensions: number | null }; domains: { id: string; name: string; color: string; icon: string; documents: number; chunks: number; embeddedChunks: number }[] };

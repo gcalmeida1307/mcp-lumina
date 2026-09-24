@@ -1,0 +1,204 @@
+name: lumina
+
+networks:
+  sofia-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  keycloakdata:
+  prometheusdata:
+  grafanadata:
+  lokidata:
+
+services:
+  # ==========================================
+  # CAMADA DE DADOS E CONHECIMENTO
+  # ==========================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: sofia-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lumina}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-lumina}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - sofia-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lumina}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sofia-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    networks:
+      - sofia-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: sofia-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-sofia}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-sofia_minio_secret}
+    ports:
+      - "9000:9000"   # API S3
+      - "9001:9001"   # Console Web
+    volumes:
+      - miniodata:/data
+    networks:
+      - sofia-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # SEGURANÇA E IDENTIDADE
+  # ==========================================
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: sofia-keycloak
+    restart: unless-stopped
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-lumina}
+      KC_DB_USERNAME: ${POSTGRES_USER:-lumina}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "8080:8080"
+    volumes:
+      - keycloakdata:/opt/keycloak/data
+    networks:
+      - sofia-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ==========================================
+  # OBSERVABILIDADE
+  # ==========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: sofia-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+    networks:
+      - sofia-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sofia-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafanadata:/var/lib/grafana
+    networks:
+      - sofia-network
+    depends_on:
+      - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:latest
+    container_name: sofia-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - lokidata:/loki
+    networks:
+      - sofia-network
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: sofia-otel
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./observability/otel/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus exporter
+    networks:
+      - sofia-network
+
+  # ==========================================
+  # APLICAÇÃO (Descomente quando criar os Dockerfiles)
+  # ==========================================
+  # frontend:
+  #   build: ./frontend
+  #   container_name: sofia-frontend
+  #   ports:
+  #     - "5173:5173"
+  #   networks:
+  #     - sofia-network
+  #   depends_on:
+  #     - gateway
+
+  # gateway:
+  #   build: ./gateway
+  #   container_name: sofia-gateway
+  #   environment:
+  #     DATABASE_URL: postgres://${POSTGRES_USER:-lumina}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-lumina}
+  #     REDIS_URL: redis://redis:6379
+  #     MINIO_ENDPOINT: minio:9000
+  #   ports:
+  #     - "4000:4000"
+  #   networks:
+  #     - sofia-network
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+
+  # core:
+  #   build: ./core
+  #   container_name: sofia-core
+  #   environment:
+  #     DATABASE_URL: postgresql://${POSTGRES_USER:-lumina}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-lumina}
+  #     REDIS_URL: redis://redis:6379
+  #     MINIO_ENDPOINT: minio:9000
+  #   ports:
+  #     - "8000:8000"
+  #   networks:
+  #     - sofia-network
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy

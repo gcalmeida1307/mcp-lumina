@@ -1,0 +1,39 @@
+/* Constellation view: real modules orbit the institutional knowledge core. */
+.kg-explorer{--kg-line:#8171b32e;--kg-border:#494064;background:#191728;border-color:#494064}
+.kg-header{background:linear-gradient(110deg,#29233e,#1d1a30);border-color:var(--kg-line)}
+.kg-navigation,.kg-filterbar,.kg-canvas-footer,.kg-status{background:#1c192e;border-color:var(--kg-line)}
+.kg-main{background:#0a0913}
+.kg-canvas-wrap{background:radial-gradient(ellipse at 50% 48%,#58408c29,transparent 57%),#080810}
+.kg-canvas-wrap::before{display:none}
+.kg-inspector{background:linear-gradient(160deg,#28243d,#211e34);border-color:var(--kg-line)}
+.kg-search{background:#211e34;border-color:#4c4268}
+.kg-summary{border:0;gap:10px;padding:0}
+.kg-summary>div{padding:16px 13px;border:1px solid #8572b51c;border-radius:12px;background:#a293d00b;min-width:0}
+.kg-summary strong{font-size:27px}
+.kg-brand>span,.kg-detail-icon{background:linear-gradient(135deg,#8f62d9,#493378);border-color:#a584d766}
+.kg-view-switch button[aria-pressed=true]{background:#4a3b6f}
+.kg-panel-toggle{border:1px solid #736396;border-radius:20px;color:#c8b8ed;background:#a78bfa0c;padding:9px 13px;font-size:10px;white-space:nowrap}
+.kg-panel-toggle:hover{background:#a78bfa20}
+.kg-panel-hidden .kg-workspace{grid-template-columns:minmax(0,1fr)}
+.kg-inspector[hidden]{display:none}
+.kg-embedding-info{padding:16px 0 22px;border-top:1px solid var(--kg-line);overflow-wrap:anywhere}
+.kg-embedding-info strong{display:block;font-size:12px;font-weight:500;color:#ddcff7;margin-top:13px}
+.kg-embedding-info p,.kg-embedding-info small{font-size:10px;color:#a89cbd;line-height:1.8;margin-top:7px}
+.kg-star{width:180px;text-align:center;position:relative;padding:7px 0 10px;cursor:pointer}
+.kg-star-orb{display:grid;place-items:center;width:21px;height:21px;margin:0 auto 15px;border-radius:50%;background:var(--node-color);border:2px solid #ece3ffcf;box-shadow:0 0 0 7px color-mix(in srgb,var(--node-color) 16%,transparent),0 0 24px color-mix(in srgb,var(--node-color) 25%,transparent);transition:box-shadow .2s,transform .2s}
+.kg-star strong{display:block;color:var(--node-color);font-size:13px;font-weight:600;letter-spacing:.03em;line-height:1.5;overflow-wrap:anywhere}
+.kg-star small{display:block;color:#b3a8cb;font-size:10px;margin-top:5px;line-height:1.5}
+.kg-star:hover .kg-star-orb,.react-flow__node:focus-visible .kg-star-orb{transform:scale(1.18);box-shadow:0 0 0 10px color-mix(in srgb,var(--node-color) 20%,transparent),0 0 35px var(--node-color)}
+.kg-star-center{cursor:grab}
+.kg-star-center .kg-star-orb{width:94px;height:94px;margin-bottom:18px;color:#f2e7ff;border:2px solid #b69ce18c;background:radial-gradient(circle at 45% 40%,#ead3ff,#9143ef 25%,#4a277f 48%,#76629888 50%,#403062aa 72%);box-shadow:0 0 55px #985bea40,inset 0 0 25px #b08add55}
+.kg-star-center strong{letter-spacing:.14em;font-size:12px}
+.kg-star .react-flow__handle{opacity:0;left:50%;top:17px;bottom:auto;pointer-events:none}
+.kg-star-center .react-flow__handle{top:54px}
+.kg-constellation .react-flow__edge-path{filter:drop-shadow(0 0 5px #a78bfa33)}
+.kg-constellation .kg-canvas-label{max-width:calc(100% - 40px)}
+.kg-explorer button:focus-visible{outline:2px solid #c4afff;outline-offset:3px}
+@media(max-width:1100px){.kg-embedding-info{grid-column:2}}
+@media(max-width:700px){.kg-header{flex-wrap:wrap}.kg-header-actions{width:100%;justify-content:flex-end}.kg-panel-toggle{margin-right:auto}.kg-embedding-info{padding-top:18px}}
+
+.kg-star strong,.kg-star small{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.kg-star.selected .kg-star-orb{outline:3px solid var(--accent);outline-offset:7px}
