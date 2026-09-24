@@ -22,4 +22,17 @@ export function webRoutes(app: Express, imports: WebImports) {
     if (!await imports.cancel(String(req.params.id), domain, req.principal.id)) return void res.status(404).json({ error: 'Importação não encontrada.' });
     res.json({ ok: true });
   });
+  app.post('/api/web-imports/:id/retry', async (req, res) => {
+    const domain = requireDomain(req, res, true); if (!domain) return;
+    try {
+      const job = await imports.retry(String(req.params.id), domain, req.principal.id);
+      if (!job) return void res.status(404).json({ error: 'Importação não pode ser repetida.' });
+      res.status(202).json(job);
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : 'Não foi possível repetir a importação.' }); }
+  });
+  app.delete('/api/web-imports/:id', async (req, res) => {
+    const domain = requireDomain(req, res, true); if (!domain) return;
+    if (!await imports.remove(String(req.params.id), domain, req.principal.id)) return void res.status(409).json({ error: 'Importações em andamento não podem ser removidas.' });
+    res.status(204).end();
+  });
 }

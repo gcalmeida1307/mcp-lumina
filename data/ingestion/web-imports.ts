@@ -44,6 +44,18 @@ export class WebImports {
     if (!job) return false;
     this.active.get(id)?.controller.abort(); return true;
   }
+  async retry(id: string, domain: string, owner: string) {
+    const job = (await this.list(domain, owner)).find(item => item.id === id);
+    if (!job || !['failed', 'cancelled', 'interrupted'].includes(job.status)) return undefined;
+    return this.start(job.url, domain, owner, job.maxPages);
+  }
+  async remove(id: string, domain: string, owner: string) {
+    const job = (await this.list(domain, owner)).find(item => item.id === id);
+    if (!job || ['queued', 'running'].includes(job.status)) return false;
+    await this.store.sql('DELETE FROM web_imports WHERE id=? AND domain=? AND owner=?', [id, domain, owner]);
+    await this.store.audit(owner, 'web.import.remove', id);
+    return true;
+  }
   async close() { this.stopping = true; for (const item of this.active.values()) item.controller.abort(); await Promise.all([...this.active.values()].map(item => item.done)); }
   private async run(job: WebImportJob, controller: AbortController) {
     try {

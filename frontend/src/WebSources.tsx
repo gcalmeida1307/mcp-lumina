@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Globe2, LoaderCircle, Square, ArrowUpRight } from 'lucide-react';
+import { Globe2, LoaderCircle, Square, ArrowUpRight, RefreshCw, Trash2 } from 'lucide-react';
 import { api } from './api';
 import type { WebImportJob } from '../../core/web-import';
 import { MAX_WEB_PAGES } from '../../core/ingestion-limits';
@@ -41,6 +41,14 @@ export function WebSources({ domain, allowed, onChange, onOpen }: { domain: stri
     try { await api(`/web-imports/${id}/cancel`, { method: 'POST', body: JSON.stringify({ domain }) }); setReload(value => value + 1); }
     catch (error) { setError(error instanceof Error ? error.message : 'Falha ao cancelar.'); }
   }
+  async function retry(id: string) {
+    try { await api(`/web-imports/${id}/retry`, { method: 'POST', body: JSON.stringify({ domain }) }); setReload(value => value + 1); }
+    catch (error) { setError(error instanceof Error ? error.message : 'Falha ao repetir.'); }
+  }
+  async function remove(id: string) {
+    try { await api(`/web-imports/${id}`, { method: 'DELETE', body: JSON.stringify({ domain }) }); setReload(value => value + 1); }
+    catch (error) { setError(error instanceof Error ? error.message : 'Falha ao remover.'); }
+  }
   const running = jobs.some(job => ['queued', 'running'].includes(job.status));
   return <section className="web-sources" aria-label="Fontes da web">
     <div className="web-heading"><Globe2 size={22} /><div><h3>Transforme sites em conhecimento</h3><p>Salve até 25 páginas como documentos offline neste módulo.</p></div></div>
@@ -49,7 +57,8 @@ export function WebSources({ domain, allowed, onChange, onOpen }: { domain: stri
     {error && <p className="web-error" role="alert">{error}<button type="button" className="text-button" onClick={() => setReload(value => value + 1)}>Atualizar</button></p>}
     <div className="web-jobs">{jobs.map(job => <details key={job.id} open={['queued', 'running'].includes(job.status) || undefined}><summary><span>{job.url}<small>{labels[job.status]} · {job.pages.filter(page => ['saved', 'duplicate'].includes(page.status)).length} páginas disponíveis · {job.visited}/{job.maxPages} visitadas</small></span>{['queued', 'running'].includes(job.status) && <LoaderCircle className="spin" size={16} />}</summary>
       {['queued', 'running'].includes(job.status) && <><progress max={job.maxPages} value={job.visited} aria-label="Páginas visitadas" />{allowed && <button type="button" className="button secondary" onClick={() => void cancel(job.id)}><Square size={13} />Cancelar importação</button>}</>}
-      {job.error && <p className="web-error">{job.error}</p>}
+      {job.error && <p className="web-error">{job.error}{/certificate|first certificate|system-ca/i.test(job.error) && <small>Reinicie a API com <code>npm run dev:api</code> para aplicar a confiança de certificados do sistema.</small>}</p>}
+      {allowed && ['failed', 'cancelled', 'interrupted'].includes(job.status) && <div className="web-job-actions"><button type="button" className="button secondary" onClick={() => void retry(job.id)}><RefreshCw size={13} />Tentar novamente</button><button type="button" className="button ghost" onClick={() => void remove(job.id)}><Trash2 size={13} />Remover</button></div>}
       <ul>{job.pages.map((page, i) => <li key={i}><span>{page.title ?? page.url}<small>{page.status === 'saved' ? 'Salva para consulta offline' : page.status === 'duplicate' ? 'Já disponível na base' : page.detail}</small></span>{page.documentId && <button type="button" className="text-button" onClick={() => onOpen(page.documentId!)}>Ler cópia <ArrowUpRight size={13} /></button>}</li>)}</ul>
     </details>)}</div>
   </section>;
