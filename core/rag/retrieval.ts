@@ -42,8 +42,10 @@ export function mergeEvidence(batches: Evidence[][], limit = 10) {
     const previous = byId.get(item.id);
     if (!previous || item.score > previous.score) byId.set(item.id, item);
   }
+  const strongest = Math.max(...[...byId.values()].map(item => item.score), 0);
+  const relevant = [...byId.values()].filter(item => item.score >= Math.max(0.18, strongest * 0.18));
   const queues = new Map<string, Evidence[]>();
-  for (const item of [...byId.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))) {
+  for (const item of relevant.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))) {
     const queue = queues.get(item.documentId) ?? [];
     queue.push(item); queues.set(item.documentId, queue);
   }
