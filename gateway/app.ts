@@ -16,11 +16,14 @@ import { Ingestion } from '../data/ingestion/pipeline.js';
 import { documentUpload } from './document-upload.js';
 import { orchestrate } from '../core/orchestrator/graph.js';
 import { listServers, listTools, callTool, serverAllows } from '../core/mcp/registry.js';
-import { registry, requests, latency, traced } from '../observability/telemetry.js';
+import { registry, requests, latency, traced, memoryDecisions } from '../observability/telemetry.js';
 import { nativeAuth, csrf, AuthError } from '../security/auth/routes.js';
 import { knowledgeRoutes } from './knowledge-routes.js';
 import { WebImports } from '../data/ingestion/web-imports.js';
 import { webRoutes } from './web-routes.js';
+import { workflows } from '../core/workflows/catalog.js';
+import { skills } from '../core/skills/catalog.js';
+import { evaluateRun } from '../core/llmops/evaluation.js';
 const querySchema = z.object({
   question: z.string().trim().min(2).max(4000),
   domain: z.string(),
@@ -52,6 +55,8 @@ export function createApp(store: Store) {
   if (config.AUTH_MODE === 'native') app.use('/api/auth', native.privateRoutes);
   app.get('/api/me', (req, res) => res.json({ ...req.principal, authMode: config.AUTH_MODE, user: req.authUser }));
   app.get('/api/domains', (req, res) => res.json(domains.filter(d => canRead(req.principal, d.id))));
+  app.get('/api/workflows', (_req, res) => res.json(workflows));
+  app.get('/api/skills', (_req, res) => res.json(skills));
   app.get('/api/status', async (req, res) => {
     const docs = (await store.documents()).filter(d => canRead(req.principal, d.domain));
     res.json({
@@ -87,6 +92,17 @@ export function createApp(store: Store) {
     });
   });
   knowledgeRoutes(app, store);
+  app.get('/api/knowledge/status', async (req, res) => {
+    const domain = requireDomain(req, res); if (!domain) return;
+    res.json({ enabled: config.KNOWLEDGE_ENABLED, pausedForChat: ingestion.knowledge.budget.paused, concurrency: 1, ...await store.knowledge.status(domain) });
+  });
+  app.post('/api/knowledge/reprocess', async (req, res) => {
+    const domain = requireDomain(req, res, true); if (!domain) return;
+    const queued = await ingestion.knowledge.seed(domain, true);
+    ingestion.knowledge.start();
+    await store.audit(req.principal.id, 'knowledge.reprocess', domain);
+    res.status(202).json({ queued });
+  });
   webRoutes(app, webImports);
   app.post('/api/neural-map/reindex', async (req, res) => {
     const domain = requireDomain(req, res, true); if (!domain) return;
@@ -114,6 +130,7 @@ export function createApp(store: Store) {
     if (!canRead(req.principal, input.domain)) return void res.status(403).json({ error: 'Acesso negado ao domínio.' });
     if (inFlight.has(req.principal.id) || inFlight.size >= 10) return void res.status(429).json({ error: 'Há uma consulta em andamento. Aguarde.' });
     inFlight.add(req.principal.id);
+    const releaseBackground = ingestion.knowledge.budget.enterChat();
     const stop = latency.startTimer();
     const stream = req.headers.accept?.includes('text/event-stream');
     if (stream) { res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('X-Accel-Buffering', 'no'); res.flushHeaders(); }
@@ -130,16 +147,31 @@ export function createApp(store: Store) {
       console.error(JSON.stringify({ event: 'query.failed', requestId: req.requestId, type: error instanceof Error ? error.name : 'Error' }));
       await store.audit(req.principal.id, 'query.failed', req.requestId);
       if (stream) { emit('error', { error: message }); res.end(); } else res.status(502).json({ error: message, requestId: req.requestId });
-    } finally { if (heartbeat) clearInterval(heartbeat); inFlight.delete(req.principal.id); stop(); }
+    } finally { if (heartbeat) clearInterval(heartbeat); inFlight.delete(req.principal.id); releaseBackground(); stop(); }
   });
   app.get('/api/runs', async (req, res) => {
     const domain = requireDomain(req, res); if (domain) res.json(await store.runs(req.principal.id, domain));
+  });
+  app.get('/api/memories', async (req, res) => {
+    const domain = requireDomain(req, res); if (!domain) return;
+    const memories = (await store.memories(req.principal.id, domain)).filter(memory => memory.state !== 'revoked');
+    res.json(memories);
+  });
+  app.post('/api/memories/:id/:state', admin, async (req, res) => {
+    const state = z.enum(['approved', 'rejected', 'revoked']).parse(req.params.state);
+    const memory = await store.memory(String(req.params.id));
+    if (!memory || !canWrite(req.principal, memory.domain)) return void res.status(404).json({ error: 'Memória não encontrada.' });
+    const changed = await store.setMemoryState(String(req.params.id), state, req.principal.id);
+    if (!changed) return void res.status(404).json({ error: 'Memória não encontrada.' });
+    await store.audit(req.principal.id, 'memory.' + state, String(req.params.id));
+    memoryDecisions.inc({ state });
+    res.json({ ok: true, state });
   });
   app.post('/api/runs/:id/feedback', async (req, res) => {
     const { value } = z.object({ value: z.union([z.literal(-1), z.literal(1)]) }).parse(req.body);
     const run = await store.run(String(req.params.id));
     if (!run || run.owner !== req.principal.id || !canRead(req.principal, run.domain)) return void res.status(404).json({ error: 'Execução não encontrada.' });
-    run.feedback = value; await store.saveRun(run); await store.audit(req.principal.id, 'query.feedback', run.id); res.json({ ok: true });
+    run.feedback = value; await store.saveRun(run); await store.saveEvaluation(evaluateRun(run)); await store.audit(req.principal.id, 'query.feedback', run.id); res.json({ ok: true });
   });
   app.get('/api/integrations', (req, res) => res.json({ catalog: integrationCatalog, servers: listServers().filter(s => s.domains.some(d => canRead(req.principal, d))) }));
   app.get('/api/mcp/:id/tools', admin, async (req, res) => {
@@ -154,6 +186,7 @@ export function createApp(store: Store) {
     res.json(await callTool(String(req.params.id), input.tool, input.arguments));
   });
   app.get('/api/audit', globalAdmin, async (_req, res) => res.json(await store.audits()));
+  app.get('/api/evaluations', globalAdmin, async (_req, res) => res.json(await store.evaluations()));
   app.get('/api/metrics', globalAdmin, async (_req, res) => { res.setHeader('Content-Type', registry.contentType); res.send(await registry.metrics()); });
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
   const dist = resolve('dist/frontend');

@@ -13,6 +13,7 @@
     "start": "node --use-system-ca node_modules/tsx/dist/cli.mjs gateway/server.ts",
     "test": "node --use-system-ca node_modules/tsx/dist/cli.mjs --test tests/*.test.ts",
     "check": "tsc --noEmit",
+    "benchmark:knowledge": "node --use-system-ca node_modules/tsx/dist/cli.mjs scripts/benchmark-knowledge.ts",
     "eval": "node --use-system-ca node_modules/tsx/dist/cli.mjs core/llmops/evaluate.ts",
     "start:lan": "node scripts/lan-server.mjs"
   },

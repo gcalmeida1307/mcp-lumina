@@ -7,6 +7,11 @@ export const registry = new Registry();
 collectDefaultMetrics({ register: registry, prefix: 'lumina_' });
 export const requests = new Counter({ name: 'lumina_http_requests_total', help: 'HTTP requests', labelNames: ['method', 'route', 'status'], registers: [registry] });
 export const latency = new Histogram({ name: 'lumina_query_seconds', help: 'Query duration', buckets: [0.1, 0.5, 1, 3, 10, 30, 90], registers: [registry] });
+export const knowledgeJobs = new Counter({ name: 'lumina_knowledge_jobs_total', help: 'Background knowledge job outcomes', labelNames: ['kind', 'outcome'], registers: [registry] });
+export const knowledgeDuration = new Histogram({ name: 'lumina_knowledge_job_seconds', help: 'Background knowledge batch duration', labelNames: ['kind'], registers: [registry] });
+export const answerReviews = new Counter({ name: 'lumina_answer_reviews_total', help: 'Answer review outcomes', labelNames: ['verdict'], registers: [registry] });
+export const answerGroundedness = new Histogram({ name: 'lumina_answer_groundedness', help: 'Groundedness coverage per answer', buckets: [0, .25, .5, .75, .9, 1], registers: [registry] });
+export const memoryDecisions = new Counter({ name: 'lumina_memory_decisions_total', help: 'Governed memory decisions', labelNames: ['state'], registers: [registry] });
 let provider: NodeTracerProvider | undefined;
 if (config.OTEL_EXPORTER_OTLP_ENDPOINT) {
   provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(new OTLPTraceExporter({ url: config.OTEL_EXPORTER_OTLP_ENDPOINT.replace(/\/$/, '') + '/v1/traces' }))] });

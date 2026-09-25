@@ -6,6 +6,7 @@ import { mergeEvidence, rankCandidates, diversify, retrieve } from '../core/rag/
 import { contextualizeQuestion } from '../core/orchestrator/context.js';
 import { config } from '../gateway/config.js';
 import { orchestrate } from '../core/orchestrator/graph.js';
+import { formatCitedAnswer } from '../core/llmops/evidence.js';
 
 const chunks: Chunk[] = [
   { id: 'ethics', documentId: 'ethics', domain: 'medicina', title: 'Ética médica', text: 'Ética, sigilo e deveres do médico. Registros em prontuário.', index: 0, vector: [1, 0], embeddingModel: 'test' },
@@ -50,4 +51,11 @@ test('embedding service failure does not disable lexical search', async t => {
   const mock = t.mock.method(globalThis, 'fetch', async () => new Response('', { status: 503 }));
   const results = await retrieve(fakeStore(), 'gripe', 'medicina');
   assert.equal(mock.mock.callCount(), 1); assert.equal(results[0].documentId, 'cid');
+});
+test('canonicalizes model citations before evidence validation', () => {
+  assert.equal(formatCitedAnswer('A resposta é [99] incorreta.', [1, 5]), 'A resposta é incorreta.\n\nFontes: [1], [5]');
+});
+test('retrieval recognizes Cyrillic lookalikes in Portuguese questions', () => {
+  const results = rankCandidates('Аdоçао família substituta', [{ ...chunks[0], title: 'Adoção e família substituta', text: 'A adoção é medida de colocação em família substituta.' }]);
+  assert.equal(results[0].chunk.title, 'Adoção e família substituta');
 });

@@ -82,7 +82,7 @@ export function rankCandidates(query: string, chunks: Chunk[], vector?: number[]
 }
 export async function retrieve(store: Store, query: string, domain: string): Promise<Evidence[]> {
   const revision = await store.revision(domain);
-  const key = 'lumina:retrieval:v2:' + createHash('sha256').update(JSON.stringify([store.cacheNamespace, domain, revision, query, config.EMBEDDING_MODEL, config.EMBEDDING_BASE_URL || config.LLM_BASE_URL, embeddingsEnabled()])).digest('hex');
+  const key = 'lumina:retrieval:v3:' + createHash('sha256').update(JSON.stringify([store.cacheNamespace, domain, revision, query, config.KNOWLEDGE_ENABLED, config.EMBEDDING_MODEL, config.EMBEDDING_BASE_URL || config.LLM_BASE_URL, embeddingsEnabled()])).digest('hex');
   return cached(key, async () => {
     const chunks = await store.chunks(domain);
     if (!chunks.length) return [];
@@ -92,7 +92,19 @@ export async function retrieve(store: Store, query: string, domain: string): Pro
       try { [vector] = await embed([query], { attempts: 1, timeoutMs: 12000 }); }
       catch { /* Text retrieval remains available during vector service failure. */ }
     }
-    return diversify(rankCandidates(query, chunks, vector, config.EMBEDDING_MODEL)).map(({ chunk, score }) => ({
+    const ranked = rankCandidates(query, chunks, vector, config.EMBEDDING_MODEL);
+    // Optional, bounded read of already validated evidence. Never invoke a worker
+    // or a model here, and never admit passages that failed query relevance.
+    if (config.KNOWLEDGE_ENABLED && store.knowledge && ranked.length) {
+      try {
+        const ids = [...new Set(ranked.slice(0, 10).map(item => item.chunk.documentId))];
+        const relations = await store.knowledge.relations(domain, ids, true);
+        const supported = new Set(relations.flatMap(relation => relation.evidence ? [relation.evidence.sourceChunk, relation.evidence.targetChunk] : []));
+        for (const item of ranked) if (supported.has(item.chunk.id)) item.score *= 1.02;
+        ranked.sort((a, b) => b.score - a.score || a.chunk.id.localeCompare(b.chunk.id));
+      } catch { /* Knowledge enrichment is optional; base retrieval stays available. */ }
+    }
+    return diversify(ranked).map(({ chunk, score }) => ({
       id: chunk.id, documentId: chunk.documentId, title: chunk.title, text: chunk.text, chunk: chunk.index + 1, page: chunk.page, score, sourceUrl: chunk.sourceUrl, capturedAt: chunk.capturedAt
     }));
   });

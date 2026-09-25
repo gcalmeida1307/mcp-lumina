@@ -18,6 +18,7 @@ const schema = z.object({
   ANTHROPIC_BASE_URL: z.string().url().default('https://api.anthropic.com'),
   ANTHROPIC_API_KEY: z.string().default(''),
   LLM_MODEL: z.string().default(''),
+  REVIEW_LLM_MODEL: z.string().default(''),
   EMBEDDING_MODEL: z.string().default(''),
   EMBEDDING_BASE_URL: z.string().default(''),
   EMBEDDING_API_KEY: z.string().default(''),
@@ -31,6 +32,13 @@ const schema = z.object({
   S3_BUCKET: z.string().default('lumina'),
   MCP_SERVERS_JSON: z.string().default('[]'),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().default(''),
+  KNOWLEDGE_ENABLED: z.enum(['true', 'false']).default('true').transform(value => value === 'true'),
+  KNOWLEDGE_POLL_MS: z.coerce.number().int().min(100).default(1500),
+  KNOWLEDGE_MAX_LAG_MS: z.coerce.number().int().min(10).default(100),
+  KNOWLEDGE_TOP_K: z.coerce.number().int().min(1).max(20).default(5),
+  KNOWLEDGE_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+  KNOWLEDGE_EMBEDDING_BATCH: z.coerce.number().int().min(1).max(16).default(2),
+  KNOWLEDGE_EMBEDDING_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(180000),
   MAX_DOCUMENT_CHARS: z.coerce.number().int().positive().default(60_000_000),
   MAX_DOCUMENT_CHUNKS: z.coerce.number().int().positive().default(60_000)
 });

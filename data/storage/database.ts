@@ -3,11 +3,13 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import pg from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { config } from '../../gateway/config.js';
-import type { Chunk, DocumentRecord, Run } from '../../core/types.js';
+import { config, embeddingsEnabled } from '../../gateway/config.js';
+import type { Chunk, DocumentRecord, EvaluationResult, ResearchMemory, Run, RunReview } from '../../core/types.js';
 import { repairMojibake } from '../processing/text.js';
+import { KnowledgeRepository } from './knowledge.js';
 type Row = Record<string, any>;
 export class Store {
+  readonly knowledge = new KnowledgeRepository(this);
   readonly cacheNamespace = crypto.randomUUID();
   private scope = new AsyncLocalStorage<pg.PoolClient | true>();
   private tail = Promise.resolve();
@@ -64,8 +66,13 @@ export class Store {
       'CREATE INDEX IF NOT EXISTS chunks_domain ON chunks(domain)',
       'CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, owner TEXT NOT NULL, domain TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL)',
       'CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, created_at TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS run_reviews (run_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, payload TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS run_evaluations (run_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, payload TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS research_memory (id TEXT PRIMARY KEY, owner TEXT NOT NULL, domain TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL)',
+      'CREATE INDEX IF NOT EXISTS research_memory_scope ON research_memory(owner, domain, created_at)',
       'CREATE TABLE IF NOT EXISTS revisions (domain TEXT PRIMARY KEY, value INTEGER NOT NULL)'
     ]) await this.sql(query);
+    await this.knowledge.init();
     for (const d of await this.documents()) {
       let changed = false;
       if (d.status === 'processing') { d.status = 'failed'; d.error = 'Processamento interrompido. Exclua e reenvie o arquivo.'; changed = true; }
@@ -81,7 +88,22 @@ export class Store {
     }
   }
   async putDocument(d: DocumentRecord) {
-    await this.sql('INSERT INTO documents (id, domain, hash, payload) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload', [d.id, d.domain, d.hash, JSON.stringify(d)]);
+    await this.transaction(async () => {
+      const previous = await this.document(d.id);
+      await this.sql('INSERT INTO documents (id, domain, hash, payload) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,hash=excluded.hash,domain=excluded.domain', [d.id, d.domain, d.hash, JSON.stringify(d)]);
+      const changed = previous && (previous.hash !== d.hash || previous.domain !== d.domain || previous.name !== d.name || previous.chunks !== d.chunks || previous.sourceUrl !== d.sourceUrl);
+      if (previous && (changed || (previous.status === 'ready' && d.status !== 'ready'))) {
+        await this.sql('DELETE FROM knowledge_relations WHERE source=? OR target=?', [d.id, d.id]);
+        await this.sql('DELETE FROM knowledge_terms WHERE document_id=?', [d.id]);
+        await this.sql('DELETE FROM knowledge_jobs WHERE document_id=?', [d.id]);
+        await this.bump(previous.domain);
+      }
+      if (d.status === 'ready') {
+        await this.knowledge.enqueue(d, 'correlation');
+        if (embeddingsEnabled()) await this.knowledge.enqueue(d, 'embedding');
+        if (previous?.status !== 'ready' || changed) await this.bump(d.domain);
+      }
+    });
   }
   async documents(domain?: string): Promise<DocumentRecord[]> {
     const rows = domain ? await this.sql('SELECT payload FROM documents WHERE domain=?', [domain]) : await this.sql('SELECT payload FROM documents');
@@ -104,10 +126,22 @@ export class Store {
     const ready = new Set((await this.documents(domain)).filter(d => d.status === 'ready').map(d => d.id));
     return rows.map(r => JSON.parse(r.payload) as Chunk).filter(c => ready.has(c.documentId));
   }
-  async deleteDocument(id: string, domain: string) { await this.sql('DELETE FROM documents WHERE id=? AND domain=?', [id, domain]); await this.bump(domain); }
+  async deleteDocument(id: string, domain: string) {
+    await this.transaction(async () => {
+      await this.sql('DELETE FROM knowledge_history WHERE domain=? AND (source=? OR target=?)', [domain, id, id]);
+      await this.sql('DELETE FROM documents WHERE id=? AND domain=?', [id, domain]);
+      await this.bump(domain);
+    });
+  }
   async bump(domain: string) { await this.sql('INSERT INTO revisions(domain,value) VALUES (?,1) ON CONFLICT(domain) DO UPDATE SET value=revisions.value+1', [domain]); }
   async revision(domain: string) { return (await this.sql('SELECT value FROM revisions WHERE domain=?', [domain]))[0]?.value ?? 0; }
   async saveRun(run: Run) { await this.sql('INSERT INTO runs(id,owner,domain,created_at,payload) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload', [run.id, run.owner, run.domain, run.createdAt, JSON.stringify(run)]); }
+  async saveReview(review: RunReview) { await this.sql('INSERT INTO run_reviews(run_id,created_at,payload) VALUES (?,?,?) ON CONFLICT(run_id) DO UPDATE SET created_at=excluded.created_at,payload=excluded.payload', [review.runId, review.createdAt, JSON.stringify(review)]); }
+  async saveEvaluation(evaluation: EvaluationResult) { await this.sql('INSERT INTO run_evaluations(run_id,created_at,payload) VALUES (?,?,?) ON CONFLICT(run_id) DO UPDATE SET created_at=excluded.created_at,payload=excluded.payload', [evaluation.runId, evaluation.createdAt, JSON.stringify(evaluation)]); }
+  async evaluations(limit = 100): Promise<EvaluationResult[]> {
+    const rows = await this.sql('SELECT payload FROM run_evaluations ORDER BY created_at DESC LIMIT ?', [limit]);
+    return rows.map(row => JSON.parse(row.payload) as EvaluationResult);
+  }
   async runs(owner: string, domain?: string): Promise<Run[]> {
     const rows = await this.sql('SELECT payload FROM runs WHERE owner=?' + (domain ? ' AND domain=?' : '') + ' ORDER BY created_at DESC LIMIT 100', domain ? [owner, domain] : [owner]);
     return rows.map(r => JSON.parse(r.payload));
@@ -117,6 +151,27 @@ export class Store {
       .filter(run => run.conversationId === conversationId)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .slice(-6);
+  }
+  async saveMemory(memory: ResearchMemory) {
+    const now = new Date().toISOString();
+    const governed = { ...memory, state: memory.state ?? 'candidate', confidence: memory.confidence ?? 0, sourceHashes: memory.sourceHashes ?? [], updatedAt: memory.updatedAt ?? now };
+    await this.sql('INSERT INTO research_memory(id,owner,domain,created_at,payload) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload', [memory.id, memory.owner, memory.domain, memory.createdAt, JSON.stringify(governed)]);
+  }
+  async memories(owner: string, domain: string, limit = 40): Promise<ResearchMemory[]> {
+    const rows = await this.sql('SELECT payload FROM research_memory WHERE owner=? AND domain=? ORDER BY created_at DESC LIMIT ?', [owner, domain, limit]);
+    return rows.map(row => JSON.parse(row.payload) as ResearchMemory);
+  }
+  async memory(id: string): Promise<ResearchMemory | undefined> {
+    const rows = await this.sql('SELECT payload FROM research_memory WHERE id=?', [id]);
+    return rows[0] ? JSON.parse(rows[0].payload) as ResearchMemory : undefined;
+  }
+  async setMemoryState(id: string, state: ResearchMemory['state'], actor: string) {
+    const rows = await this.sql('SELECT payload FROM research_memory WHERE id=?', [id]);
+    if (!rows[0]) return false;
+    const memory = JSON.parse(rows[0].payload) as ResearchMemory;
+    memory.state = state; memory.approvedBy = state === 'approved' ? actor : memory.approvedBy; memory.updatedAt = new Date().toISOString();
+    await this.sql('UPDATE research_memory SET payload=? WHERE id=?', [JSON.stringify(memory), id]);
+    return true;
   }
   async run(id: string): Promise<Run | undefined> { const rows = await this.sql('SELECT payload FROM runs WHERE id=?', [id]); return rows[0] ? JSON.parse(rows[0].payload) : undefined; }
   async audit(actor: string, action: string, target: string) {
