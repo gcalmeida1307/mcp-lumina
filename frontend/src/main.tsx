@@ -1,4 +1,4 @@
-import { MAX_UPLOAD_BYTES } from '../../core/ingestion-limits';
+import { MAX_UPLOAD_BATCH_BYTES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES } from '../../core/ingestion-limits';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -147,15 +147,20 @@ function App() {
     return () => clearInterval(timer);
   }, [page, neuralMap]);
   function navigate(next: Page) { setPage(next); setSidebar(false); }
-  async function upload(file?: File) {
-    if (!file || uploadBusy) return;
-    if (file.size > MAX_UPLOAD_BYTES) return setError('O limite por arquivo é 50 MB.');
+  async function upload(input?: FileList | File[]) {
+    if (!input || uploadBusy) return;
+    const files = [...input];
+    if (!files.length) return;
+    if (files.length > MAX_UPLOAD_FILES) return setError(`Selecione no máximo ${MAX_UPLOAD_FILES} arquivos por lote.`);
+    if (files.some(file => file.size > MAX_UPLOAD_BYTES)) return setError('Cada arquivo pode ter no máximo 50 MB.');
+    if (files.reduce((sum, file) => sum + file.size, 0) > MAX_UPLOAD_BATCH_BYTES) return setError('O lote pode ter no máximo 200 MB. Divida os arquivos.');
     setUploadBusy(true);
     try {
-      const body = new FormData(); body.append('domain', domain); body.append('file', file);
-      const result = await api<{ document: DocumentRecord; duplicate: boolean }>('/documents', { method: 'POST', body });
-      setNotice(result.duplicate ? 'Este arquivo já existe neste domínio.' : 'Arquivo recebido. Acompanhe o processamento no pipeline.');
-      setUploadOpen(false); await refresh(); setSelectedDocument(result.document.id); navigate('pipeline');
+      const body = new FormData(); body.append('domain', domain); files.forEach(file => body.append('files', file));
+      const result = await api<{ files: { document: DocumentRecord; duplicate: boolean }[]; total: number }>('/documents', { method: 'POST', body });
+      const duplicates = result.files.filter(item => item.duplicate).length;
+      setNotice(`${result.total} arquivo(s) recebido(s).${duplicates ? ` ${duplicates} já estava(m) na base.` : ''} Acompanhe o processamento no pipeline.`);
+      setUploadOpen(false); await refresh(); setSelectedDocument(result.files[0]?.document.id); navigate('pipeline');
     } catch (e) { setError((e as Error).message); } finally { setUploadBusy(false); }
   }
   async function removeDocument(id: string) {
@@ -273,7 +278,7 @@ function App() {
     </div>
     {error && <div className="toast error" role="alert"><AlertCircle size={19} /><span>{error}</span><button className="icon-button" aria-label="Fechar erro" onClick={() => setError('')}><X size={17} /></button></div>}
     {notice && <div className="toast success" role="status"><CheckCircle2 size={18} />{notice}</div>}
-    {uploadOpen && <div className="modal-backdrop" onClick={() => !uploadBusy && setUploadOpen(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="upload-title" onClick={e => e.stopPropagation()}><div className="panel-heading"><div><h2 id="upload-title">Adicionar conhecimento</h2><p>{activeDomain?.name}</p></div><button className="icon-button" aria-label="Fechar" disabled={uploadBusy} onClick={() => setUploadOpen(false)}><X size={20} /></button></div><label className={'dropzone ' + (uploadBusy ? 'busy' : '')} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); void upload(e.dataTransfer.files[0]); }}><span><Upload size={29} /></span><strong>{uploadBusy ? 'Recebendo seu documento...' : 'Arraste um arquivo até aqui'}</strong><p>ou clique para selecionar no computador</p><small>TXT, MD, CSV, JSON, PDF, DOCX, XLSX · Até 50 MB</small><input type="file" aria-label="Selecionar documento" accept=".txt,.md,.csv,.json,.pdf,.docx,.xlsx" disabled={uploadBusy} onChange={e => void upload(e.target.files?.[0])} /></label><WebSources key={domain} domain={domain} allowed={Boolean(allowedWrite)} onChange={() => void refresh().catch(e => setError(e.message))} onOpen={id => { setUploadOpen(false); setOfflineId(id); }} /><div className="modal-info"><ShieldCheck size={17} /><p>O documento ficará disponível apenas no domínio selecionado. PDFs sem texto extraível serão sinalizados no pipeline.</p></div></section></div>}
+    {uploadOpen && <div className="modal-backdrop" onClick={() => !uploadBusy && setUploadOpen(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="upload-title" onClick={e => e.stopPropagation()}><div className="panel-heading"><div><h2 id="upload-title">Adicionar conhecimento</h2><p>{activeDomain?.name}</p></div><button className="icon-button" aria-label="Fechar" disabled={uploadBusy} onClick={() => setUploadOpen(false)}><X size={20} /></button></div><label className={'dropzone ' + (uploadBusy ? 'busy' : '')} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); void upload(e.dataTransfer.files); }}><span><Upload size={29} /></span><strong>{uploadBusy ? 'Recebendo arquivos...' : 'Arraste vários arquivos até aqui'}</strong><p>ou clique para selecionar no computador</p><small>Até {MAX_UPLOAD_FILES} arquivos · 200 MB por lote · 50 MB por arquivo</small><input type="file" multiple aria-label="Selecionar documentos" accept=".txt,.md,.csv,.json,.pdf,.docx,.xlsx" disabled={uploadBusy} onChange={e => void upload(e.target.files ?? undefined)} /></label><WebSources key={domain} domain={domain} allowed={Boolean(allowedWrite)} onChange={() => void refresh().catch(e => setError(e.message))} onOpen={id => { setUploadOpen(false); setOfflineId(id); }} /><div className="modal-info"><ShieldCheck size={17} /><p>Os documentos ficarão disponíveis apenas no domínio selecionado. PDFs sem texto extraível serão sinalizados no pipeline.</p></div></section></div>}
     {offlineId && <OfflineReader key={offlineId + domain} id={offlineId} domain={domain} onClose={() => setOfflineId(undefined)} />}
     {confirmDelete && <div className="modal-backdrop"><section className="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><h2 id="delete-title">Excluir documento?</h2><p>O arquivo original e seus trechos serão removidos da base. Respostas anteriores permanecem no histórico de consultas.</p><div className="modal-actions"><button className="button secondary" onClick={() => setConfirmDelete(undefined)}>Cancelar</button><button className="button danger" onClick={() => void removeDocument(confirmDelete)}>Excluir documento</button></div></section></div>}
   </div>;

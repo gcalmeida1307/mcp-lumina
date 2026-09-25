@@ -9,6 +9,10 @@ import { config, embeddingsEnabled } from '../../gateway/config.js';
 import type { DocumentRecord } from '../../core/types.js';
 import { MAX_UPLOAD_BYTES } from '../../core/ingestion-limits.js';
 export const stageNames = ['Upload', 'Extração', 'Qualidade', 'Normalização', 'Enriquecimento', 'Indexação', 'Validação', 'Disponível'];
+export function contentFingerprint(text: string) {
+  const meaningful = text.replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '').replace(/\s+/g, ' ').trim();
+  return createHash('sha256').update(meaningful.normalize('NFKC').toLocaleLowerCase('pt-BR')).digest('hex');
+}
 export class Ingestion {
   private tail = Promise.resolve();
   private pending = 0;
@@ -51,6 +55,15 @@ export class Ingestion {
       let text = (await extract(d.name, content)).text;
       const meaningfulText = text.replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '').replace(/\s+/g, ' ').trim();
       if (!meaningfulText) throw new Error('Sem texto extraível. Este PDF parece digitalizado e precisa de OCR antes de ser consultado.');
+      const contentHash = contentFingerprint(text);
+      const duplicate = (await this.store.documents(d.domain)).find(item => item.id !== d.id && item.contentHash === contentHash && item.status === 'ready');
+      if (duplicate) {
+        if (d.objectKey) await deleteObject(d.objectKey);
+        await this.store.deleteDocument(d.id, d.domain);
+        await this.store.audit(d.owner, 'document.duplicate-content', duplicate.id);
+        return;
+      }
+      d.contentHash = contentHash;
       await complete(stage, 'Texto extraído do arquivo.');
       stage = 'Qualidade';
       if (meaningfulText.length < 20) throw new Error('Texto insuficiente: mínimo de 20 caracteres úteis.');

@@ -4,6 +4,7 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { documentUpload } from '../gateway/document-upload.js';
 import { MAX_UPLOAD_BYTES } from '../core/ingestion-limits.js';
+import { contentFingerprint } from '../data/ingestion/pipeline.js';
 
 test('multipart endpoint accepts files above 10 MB through 50 MB, rejects larger payloads', async t => {
   const app = express(); app.post('/upload', documentUpload, (req,res) => res.json({ size: req.file?.size }));
@@ -17,4 +18,8 @@ test('multipart endpoint accepts files above 10 MB through 50 MB, rejects larger
     assert.equal(result.status,size > MAX_UPLOAD_BYTES ? 400 : 200);
     if(result.ok) assert.equal((await result.json()).size,size); else await result.arrayBuffer();
   }
+});
+
+test('content fingerprints ignore filename changes and formatting-only differences', () => {
+  assert.equal(contentFingerprint('Adoção\n\nresponsável.'), contentFingerprint(' adoção responsável. '));
 });

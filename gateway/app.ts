@@ -13,7 +13,8 @@ import { domains } from '../services/domains.js';
 import { integrationCatalog } from '../integrations/catalog.js';
 import { Store } from '../data/storage/database.js';
 import { Ingestion } from '../data/ingestion/pipeline.js';
-import { documentUpload } from './document-upload.js';
+import { documentUploads } from './document-upload.js';
+import { MAX_UPLOAD_BATCH_BYTES } from '../core/ingestion-limits.js';
 import { orchestrate } from '../core/orchestrator/graph.js';
 import { listServers, listTools, callTool, serverAllows } from '../core/mcp/registry.js';
 import { registry, requests, latency, traced, memoryDecisions } from '../observability/telemetry.js';
@@ -112,10 +113,15 @@ export function createApp(store: Store) {
     res.status(202).json({ queued });
   });
   app.get('/api/documents', async (req, res) => { const domain = requireDomain(req, res); if (domain) res.json(await store.documents(domain)); });
-  app.post('/api/documents', documentUpload, async (req, res) => {
+  app.post('/api/documents', documentUploads, async (req, res) => {
     const domain = requireDomain(req, res, true); if (!domain) return;
-    if (!req.file) return void res.status(400).json({ error: 'Envie um arquivo TXT, MD, CSV, JSON, PDF, DOCX ou XLSX, até 50 MB.' });
-    res.status(202).json(await ingestion.enqueue(req.file.originalname, req.file.buffer, domain, req.principal.id));
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return void res.status(400).json({ error: 'Envie um ou mais arquivos TXT, MD, CSV, JSON, PDF, DOCX ou XLSX, até 50 MB cada.' });
+    const total = files.reduce((sum, file) => sum + file.size, 0);
+    if (total > MAX_UPLOAD_BATCH_BYTES) return void res.status(413).json({ error: 'O lote excede 200 MB. Divida os arquivos em lotes menores.' });
+    const documents = [];
+    for (const file of files) documents.push(await ingestion.enqueue(file.originalname, file.buffer, domain, req.principal.id));
+    res.status(202).json({ files: documents, total: files.length });
   });
   app.delete('/api/documents/:id', async (req, res) => {
     const doc = await store.document(String(req.params.id));

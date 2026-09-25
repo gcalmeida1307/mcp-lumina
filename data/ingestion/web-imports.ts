@@ -63,8 +63,9 @@ export class WebImports {
       await crawlWebsite({ url: job.url, maxPages: job.maxPages, signal: controller.signal,
         save: async page => {
           const capturedAt = new Date().toISOString();
-          const name = `${page.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').slice(0, 145)}.md`;
-          const result = await this.ingestion.enqueue(name, Buffer.from(`# ${page.title}\n\n${page.text}`, 'utf8'), job.domain, job.owner, { sourceUrl: page.url, capturedAt, webLinks: page.links });
+          const name = page.body ? page.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').slice(0, 145) : `${page.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').slice(0, 145)}.md`;
+          const content = page.body ?? Buffer.from(`# ${page.title}\n\n${page.text}`, 'utf8');
+          const result = await this.ingestion.enqueue(name, content, job.domain, job.owner, { sourceUrl: page.url, capturedAt, webLinks: page.links });
           await this.ingestion.flushDocuments();
           const document = await this.store.document(result.document.id);
           if (!document || document.status !== 'ready') throw new Error(document?.error ?? 'A página não pôde ser indexada.');

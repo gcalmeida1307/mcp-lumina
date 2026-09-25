@@ -32,7 +32,7 @@ type Dependencies = {
 };
 export async function crawlWebsite(input: {
   url: string; maxPages: number; signal: AbortSignal;
-  save: (page: { url: string; title: string; text: string; links: string[] }) => Promise<{ documentId: string; duplicate: boolean }>;
+  save: (page: { url: string; title: string; text: string; links: string[]; body?: Buffer; contentType?: string }) => Promise<{ documentId: string; duplicate: boolean }>;
   progress: (page: WebImportPage, visited: number) => Promise<void>;
 }, dependencies: Partial<Dependencies> = {}) {
   if (!Number.isInteger(input.maxPages) || input.maxPages < 1 || input.maxPages > MAX_WEB_PAGES) throw new Error('Escolha entre 1 e 25 páginas.');
@@ -77,7 +77,12 @@ export async function crawlWebsite(input: {
       if (!response) throw new Error('Redirecionamentos excessivos.');
       if (response.status < 200 || response.status >= 300) throw new Error(`O site retornou HTTP ${response.status}.`);
       const type = String(response.headers['content-type'] ?? '');
-      if (!/^(text\/html|application\/xhtml\+xml)\b/i.test(type)) throw new Error('A URL não retornou uma página HTML.');
+      if (/^application\/pdf\b/i.test(type)) {
+        const saved = await input.save({ url: url.href, title: url.pathname.split('/').pop() || 'documento.pdf', text: '', links: [], body: response.body, contentType: type });
+        await input.progress({ url: url.href, title: url.pathname.split('/').pop() || 'documento.pdf', documentId: saved.documentId, status: saved.duplicate ? 'duplicate' : 'saved' }, requests);
+        continue;
+      }
+      if (!/^(text\/html|application\/xhtml\+xml)\b/i.test(type)) throw new Error('A URL não retornou HTML ou PDF público.');
       const page = extractPage(response.body, url, type);
       const noArchive = /\b(noarchive|noindex|none)\b/i.test(String(response.headers['x-robots-tag'] ?? ''));
       if (page.noArchive || noArchive) throw new Error('A página solicita não ser arquivada/indexada.');

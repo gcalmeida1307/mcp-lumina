@@ -37,6 +37,17 @@ test('crawler visits at most 25 pages, deduplicates links and never leaves origi
   assert.equal(saved.length, 25); assert.equal(visited.length, 26); assert.equal(new Set(saved).size, 25);
   assert.ok(visited.every(url => url.startsWith('https://example.com/'))); assert.ok(progress.every(page => page.status === 'saved'));
 });
+
+test('crawler passes public PDFs to the ingestion callback', async () => {
+  const saved: { body?: Buffer; contentType?: string }[] = [];
+  await crawlWebsite({ url: 'https://example.com/bula.pdf', maxPages: 1, signal: new AbortController().signal,
+    save: async page => { saved.push(page); return { documentId: 'pdf', duplicate: false }; }, progress: async () => {} }, {
+      fetch: async () => ({ status: 200, headers: { 'content-type': 'application/pdf' }, body: Buffer.from('%PDF-') }),
+      wait: async () => undefined
+    });
+  assert.equal(saved[0].contentType, 'application/pdf');
+  assert.deepEqual(saved[0].body, Buffer.from('%PDF-'));
+});
 test('robots restrictions, noarchive and off-origin redirects are honored', async () => {
   const visited: string[] = [], saved: string[] = [], progress: WebImportPage[] = [];
   await crawlWebsite({ url: 'https://example.com/', maxPages: 8, signal: new AbortController().signal,

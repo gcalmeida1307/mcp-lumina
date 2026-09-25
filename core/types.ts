@@ -3,7 +3,7 @@ export type Stage = { name: string; status: 'done' | 'failed'; detail: string; a
 export type DocumentRecord = {
   id: string; name: string; domain: string; hash: string; status: 'processing' | 'ready' | 'failed';
   createdAt: string; owner: string; size: number; chunks: number; stages: Stage[];
-  error?: string; embeddingModel?: string; objectKey?: string;
+  error?: string; contentHash?: string; embeddingModel?: string; objectKey?: string;
   sourceUrl?: string; capturedAt?: string; webLinks?: string[];
 };
 export type Chunk = { id: string; documentId: string; domain: string; title: string; index: number; text: string; page?: number; vector?: number[]; embeddingModel?: string; sourceUrl?: string; capturedAt?: string };
