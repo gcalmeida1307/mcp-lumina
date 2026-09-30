@@ -25,3 +25,27 @@ test('provider failures retain HTTP status without exposing response bodies or c
     }
   }
 });
+
+test('configured remote provider fails clearly under LOCAL and works when explicitly authorized', async t => {
+  const { configuredModels } = await import('../core/llmops/registry.js');
+  const { ModelConfigurationError } = await import('../core/llmops/errors.js');
+  const original = { ...config };
+  t.after(() => Object.assign(config, original));
+  Object.assign(config, { LLM_PROVIDER: 'openai', LLM_MODEL: 'test', LLM_API_KEY: 'private-test-key', OLLAMA_MODEL: '', MODEL_MODE: 'LOCAL', MODEL_ALLOW_REMOTE: false });
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] })));
+  const input = { messages: [{ role: 'user' as const, content: 'test' }] };
+  await assert.rejects(configuredModels().understand(input), error => {
+    assert.ok(error instanceof ModelConfigurationError);
+    assert.equal(error.code, 'MODEL_CONFIGURATION');
+    assert.match(error.message, /MODEL_MODE=HYBRID/);
+    assert.doesNotMatch(error.message, /private-test-key/);
+    return true;
+  });
+  assert.equal(fetchMock.mock.callCount(), 0);
+  config.MODEL_MODE = 'HYBRID';
+  await assert.rejects(configuredModels().understand(input), ModelConfigurationError);
+  assert.equal(fetchMock.mock.callCount(), 0);
+  config.MODEL_ALLOW_REMOTE = true;
+  assert.equal((await configuredModels().understand(input)).modelId, 'primary');
+  assert.equal(fetchMock.mock.callCount(), 1);
+});

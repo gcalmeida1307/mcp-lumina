@@ -64,6 +64,7 @@ export class Store {
       'CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, domain TEXT NOT NULL, hash TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(domain, hash))',
       'CREATE TABLE IF NOT EXISTS chunks (id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE, domain TEXT NOT NULL, payload TEXT NOT NULL)',
       'CREATE INDEX IF NOT EXISTS chunks_domain ON chunks(domain)',
+      'CREATE INDEX IF NOT EXISTS chunks_document_scope ON chunks(domain, document_id)',
       'CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, owner TEXT NOT NULL, domain TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL)',
       'CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, created_at TEXT NOT NULL)',
       'CREATE TABLE IF NOT EXISTS run_reviews (run_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, payload TEXT NOT NULL)',
@@ -121,10 +122,24 @@ export class Store {
     chunk.vector = vector; chunk.embeddingModel = embeddingModel;
     await this.sql('UPDATE chunks SET payload=? WHERE id=?', [JSON.stringify(chunk), id]);
   }
-  async chunks(domain: string): Promise<Chunk[]> {
-    const rows = await this.sql('SELECT c.payload FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.domain=?', [domain]);
+  async chunks(domain: string, documentIds?: string[]): Promise<Chunk[]> {
+    if (documentIds && !documentIds.length) return [];
+    const scope = documentIds ? ' AND c.document_id IN (' + documentIds.map(() => '?').join(',') + ')' : '';
+    const rows = await this.sql('SELECT c.payload FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.domain=? AND d.domain=?' + scope, [domain, domain, ...(documentIds ?? [])]);
     const ready = new Set((await this.documents(domain)).filter(d => d.status === 'ready').map(d => d.id));
     return rows.map(r => JSON.parse(r.payload) as Chunk).filter(c => ready.has(c.documentId));
+  }
+  /** Bounded original reads; never load the entire domain to read a passage. */
+  async readChunks(domain: string, documentIds: string[], offset = 0, limit = 6, chunkIds?: string[]): Promise<Chunk[]> {
+    if (!documentIds.length || (chunkIds && !chunkIds.length)) return [];
+    if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 24) throw new Error('Janela de leitura inválida.');
+    const ready = (await this.documents(domain)).filter(d => d.status === 'ready' && documentIds.includes(d.id)).map(d => d.id);
+    if (!ready.length) return [];
+    const ordinal = this.pool ? "CAST(CAST(c.payload AS JSON)->>'index' AS INTEGER)" : "json_extract(c.payload, '$.index')";
+    const query = 'SELECT c.payload FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.domain=? AND d.domain=? AND c.document_id IN (' +
+      ready.map(() => '?').join(',') + ')' + (chunkIds ? ' AND c.id IN (' + chunkIds.map(() => '?').join(',') + ')' : '') +
+      ' ORDER BY c.document_id, ' + ordinal + ', c.id LIMIT ? OFFSET ?';
+    return (await this.sql(query, [domain, domain, ...ready, ...(chunkIds ?? []), limit, offset])).map(row => JSON.parse(row.payload) as Chunk);
   }
   async deleteDocument(id: string, domain: string) {
     await this.transaction(async () => {

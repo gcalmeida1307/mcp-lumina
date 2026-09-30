@@ -9,28 +9,22 @@ async function request(path: string, body: unknown, baseUrl = config.LLM_BASE_UR
   if (!response.ok) { await response.body?.cancel(); throw new ProviderHttpError(response.status); }
   return response.json() as Promise<any>;
 }
-async function anthropicRequest(messages: Message[], maxTokens: number, model = config.LLM_MODEL) {
-  const system = messages.filter(message => message.role === 'system').map(message => message.content).join('\n\n');
-  const response = await fetch(config.ANTHROPIC_BASE_URL.replace(/\/$/, '') + '/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': config.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, system, messages: messages.filter(message => message.role !== 'system'), temperature: 0, max_tokens: maxTokens }),
-    signal: AbortSignal.timeout(60000), redirect: 'error'
-  });
-  if (!response.ok) { await response.body?.cancel(); throw new ProviderHttpError(response.status); }
-  return response.json() as Promise<any>;
-}
+export { configuredModels, createChatProvider } from './registry.js';
+import { createChatProvider } from './registry.js';
 export async function generate(messages: Message[], maxTokens = 3000, model = config.LLM_MODEL) {
   if (!generationEnabled()) throw new Error('Modelo de geração não configurado.');
-  const result = config.LLM_PROVIDER === 'anthropic' ? await anthropicRequest(messages, maxTokens, model) : await request('/chat/completions', {
-    model, messages, temperature: 0,
-    response_format: { type: 'json_object' }, max_tokens: maxTokens
-  }, config.LLM_PROVIDER === 'ollama' ? config.OLLAMA_BASE_URL : config.LLM_BASE_URL, config.LLM_PROVIDER === 'ollama' ? '' : config.LLM_API_KEY, config.LLM_PROVIDER === 'ollama' ? 180000 : 60000);
-  const content = config.LLM_PROVIDER === 'anthropic' ? result.content?.find((block: any) => block.type === 'text')?.text : result.choices?.[0]?.message?.content;
-  if (typeof content !== 'string') throw new Error('Resposta vazia do provedor.');
+  // Compatibility entry point: selected legacy provider, no automatic fallback.
+  const local = config.LLM_PROVIDER === 'ollama';
+  const provider = createChatProvider({
+    id: 'legacy', provider: config.LLM_PROVIDER, model, local,
+    capabilities: { text: true, structuredOutput: true, vision: false, coding: false, toolUse: false, longContext: false, embeddings: false },
+    baseUrl: local ? config.OLLAMA_BASE_URL : config.LLM_PROVIDER === 'anthropic' ? config.ANTHROPIC_BASE_URL : config.LLM_BASE_URL,
+    apiKey: local ? '' : config.LLM_PROVIDER === 'anthropic' ? config.ANTHROPIC_API_KEY : config.LLM_API_KEY
+  });
+  const result = await provider.invoke({ messages, maxTokens, format: 'json' });
   let data: unknown;
-  try { data = JSON.parse(content); } catch { throw new Error('O modelo não retornou JSON válido.'); }
-  return { data, inputTokens: Number(result.usage?.input_tokens ?? result.usage?.prompt_tokens ?? 0), outputTokens: Number(result.usage?.output_tokens ?? result.usage?.completion_tokens ?? 0) };
+  try { data = JSON.parse(result.text); } catch { throw new Error('O modelo não retornou JSON válido.'); }
+  return { data, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 export async function embed(texts: string[], options: { attempts?: number; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<number[][]> {
   if (!embeddingsEnabled()) return [];

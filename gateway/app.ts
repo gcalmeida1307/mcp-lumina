@@ -1,4 +1,4 @@
-import { ProviderHttpError } from '../core/llmops/errors.js';
+import { ModelConfigurationError, ProviderHttpError } from '../core/llmops/errors.js';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -150,10 +150,10 @@ export function createApp(store: Store) {
       const run = await traced('lumina.query', () => orchestrate(store, req.principal, input.question, input.domain, input.agent, persistedHistory, input.conversationId, stream ? s => emit('step', s) : undefined));
       if (stream) { emit('result', run); res.end(); } else res.json(run);
     } catch (error) {
-      const message = error instanceof ProviderHttpError ? error.message : 'A consulta não foi concluída. Tente novamente ou informe o identificador da requisição ao administrador.';
-      console.error(JSON.stringify({ event: 'query.failed', requestId: req.requestId, type: error instanceof Error ? error.name : 'Error', providerStatus: error instanceof ProviderHttpError ? error.status : undefined }));
+      const message = error instanceof ProviderHttpError || error instanceof ModelConfigurationError ? error.message : 'A consulta não foi concluída. Tente novamente ou informe o identificador da requisição ao administrador.';
+      console.error(JSON.stringify({ event: 'query.failed', requestId: req.requestId, type: error instanceof Error ? error.name : 'Error', code: error instanceof ModelConfigurationError ? error.code : undefined, providerStatus: error instanceof ProviderHttpError ? error.status : undefined }));
       await store.audit(req.principal.id, 'query.failed', req.requestId);
-      if (stream) { emit('error', { error: message, requestId: req.requestId }); res.end(); } else res.status(502).json({ error: message, requestId: req.requestId });
+      if (stream) { emit('error', { error: message, requestId: req.requestId }); res.end(); } else res.status(error instanceof ModelConfigurationError ? 503 : 502).json({ error: message, requestId: req.requestId });
     } finally { if (heartbeat) clearInterval(heartbeat); inFlight.delete(req.principal.id); releaseBackground(); stop(); }
   });
   app.get('/api/runs', async (req, res) => {

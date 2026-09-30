@@ -13,3 +13,12 @@ export class ProviderHttpError extends Error {
     this.name = 'ProviderHttpError';
   }
 }
+
+/** Safe configuration diagnostic: never includes credentials or provider output. */
+export class ModelConfigurationError extends Error {
+  readonly code = 'MODEL_CONFIGURATION';
+  constructor(detail: string) {
+    super(detail);
+    this.name = 'ModelConfigurationError';
+  }
+}

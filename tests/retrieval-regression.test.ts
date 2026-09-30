@@ -53,7 +53,7 @@ test('embedding service failure does not disable lexical search', async t => {
   assert.equal(mock.mock.callCount(), 1); assert.equal(results[0].documentId, 'cid');
 });
 test('canonicalizes model citations before evidence validation', () => {
-  assert.equal(formatCitedAnswer('A resposta é [99] incorreta.', [1, 5]), 'A resposta é incorreta.\n\nFontes: [1], [5]');
+  assert.equal(formatCitedAnswer('A resposta é [99] incorreta.', [1, 5]), 'A resposta é incorreta.');
 });
 test('retrieval recognizes Cyrillic lookalikes in Portuguese questions', () => {
   const results = rankCandidates('Аdоçао família substituta', [{ ...chunks[0], title: 'Adoção e família substituta', text: 'A adoção é medida de colocação em família substituta.' }]);

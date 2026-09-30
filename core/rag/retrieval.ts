@@ -82,11 +82,12 @@ export function rankCandidates(query: string, chunks: Chunk[], vector?: number[]
     return { chunk, score: eligible ? (top > 0 ? textScore + Math.max(0, semantic) * .08 : semantic) : 0 };
   }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.chunk.id.localeCompare(b.chunk.id));
 }
-export async function retrieve(store: Store, query: string, domain: string, documentIds?: string[]): Promise<Evidence[]> {
+export async function retrieve(store: Store, query: string, domain: string, documentIds?: string[], limit = 10): Promise<Evidence[]> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 24) throw new Error('Limite de busca inválido.');
   const revision = await store.revision(domain);
-  const key = 'lumina:retrieval:v4:' + createHash('sha256').update(JSON.stringify([store.cacheNamespace, domain, revision, query, documentIds?.slice().sort(), config.KNOWLEDGE_ENABLED, config.EMBEDDING_MODEL, config.EMBEDDING_BASE_URL || config.LLM_BASE_URL, embeddingsEnabled()])).digest('hex');
+  const key = 'lumina:retrieval:v5:' + createHash('sha256').update(JSON.stringify([store.cacheNamespace, domain, revision, limit, query, documentIds?.slice().sort(), config.KNOWLEDGE_ENABLED, config.EMBEDDING_MODEL, config.EMBEDDING_BASE_URL || config.LLM_BASE_URL, embeddingsEnabled()])).digest('hex');
   return cached(key, async () => {
-    const chunks = (await store.chunks(domain)).filter(chunk => !documentIds || documentIds.includes(chunk.documentId));
+    const chunks = (await store.chunks(domain, documentIds)).filter(chunk => !documentIds || documentIds.includes(chunk.documentId));
     if (!chunks.length) return [];
     const indexed = chunks.filter(c => c.vector && c.embeddingModel === config.EMBEDDING_MODEL);
     let vector: number[] | undefined;
@@ -107,7 +108,7 @@ export async function retrieve(store: Store, query: string, domain: string, docu
         ranked.sort((a, b) => b.score - a.score || a.chunk.id.localeCompare(b.chunk.id));
       } catch { /* Knowledge enrichment is optional; base retrieval stays available. */ }
     }
-    return diversify(ranked).map(({ chunk, score }) => ({
+    return diversify(ranked, limit).map(({ chunk, score }) => ({
       id: chunk.id, documentId: chunk.documentId, title: titles.get(chunk.id) ?? chunk.title, text: chunk.text, chunk: chunk.index + 1, page: chunk.page, score, sourceUrl: chunk.sourceUrl, capturedAt: chunk.capturedAt
     }));
   });

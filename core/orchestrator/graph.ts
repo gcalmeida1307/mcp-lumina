@@ -10,7 +10,11 @@ import {
   validCitations
 } from '../llmops/evidence.js';
 
-import { generate } from '../llmops/provider.js';
+import { generate, configuredModels } from '../llmops/provider.js';
+import { interpret } from './interpreter.js';
+import { executeCognitive } from './cognitive.js';
+import { describeDocument } from '../resources.js';
+import { createInvestigation, accumulateEvidence, type InvestigationState } from './investigation.js';
 import { reviewAnswer } from '../llmops/review.js';
 import { evaluateRun } from '../llmops/evaluation.js';
 
@@ -94,6 +98,7 @@ const comparisonRequested = (question: string) =>
  * Atualizado para acomodar o contexto semântico retornado pelo Task Router.
  */
 const State = Annotation.Root({
+  investigation: Annotation<InvestigationState>(),
   queries: Annotation<string[]>(),
 
   sources: Annotation<Evidence[]>(),
@@ -238,11 +243,35 @@ export async function orchestrate(
    * ============================================================
    */
 
-  const routing =
-    await routeMessage(
-      normalizedQuestion,
-      history
-    );
+  const documents = typeof store.documents === 'function' ? await store.documents(domain) : [];
+  const investigation = createInvestigation(documents.map(describeDocument));
+  const models = configuredModels();
+  const signal = AbortSignal.timeout(investigation.budget.timeoutMs);
+  const inlineEvidence: Evidence[] = [];
+  if (config.COGNITIVE_INTERPRETER && llm) {
+    const blocks = [...normalizedQuestion.matchAll(/\x60{3}[^\n]*\n([\s\S]*?)\x60{3}/g)].map(match => match[1].trim());
+    for (const [index, text] of (blocks.length ? blocks : [normalizedQuestion]).entries()) {
+      const id = 'user-text:' + runId + ':' + index;
+      investigation.resources.push({ id, kind: 'document', name: 'Texto da mensagem ' + (index + 1), domains: [domain],
+        roles: ['context'], capabilities: ['READ', 'SEARCH'], provenance: { source: 'user-text' }, metadata: {} });
+      for (let offset = 0; offset < text.length; offset += 3000) {
+        inlineEvidence.push({ id: id + ':' + offset, documentId: id, title: 'Texto da mensagem ' + (index + 1),
+          text: text.slice(offset, offset + 3000), chunk: offset / 3000 + 1, score: 1 });
+      }
+    }
+  }
+  const interpreted = config.COGNITIVE_INTERPRETER && llm
+    ? await interpret(models, { message: normalizedQuestion, history, domain, resources: investigation.resources }, signal)
+    : undefined;
+  investigation.understanding = interpreted?.understanding;
+  const understanding = interpreted?.understanding;
+  const routing = understanding ? {
+    mode: understanding.interaction === 'conversation' ? 'chat' : 'task',
+    task: undefined, objective: understanding.objective, focus: undefined,
+    preserveState: understanding.needsContext, requiresRetrieval: understanding.needsKnowledge,
+    requiresPlanning: understanding.suggestedOperations.length > 1,
+    confidence: understanding.uncertainty.length ? 'low' : 'high', reason: 'Interpreter'
+  } : await routeMessage(normalizedQuestion, history);
 
 
   step(
@@ -314,12 +343,7 @@ export async function orchestrate(
    * ============================================================
    */
 
-  const documentNames =
-    typeof store.documents === 'function'
-      ? (
-          await store.documents(domain)
-        ).map(document => document.name)
-      : [];
+  const documentNames = documents.map(document => document.name);
 
 
   /*
@@ -419,10 +443,10 @@ export async function orchestrate(
               ),
 
             inputTokens:
-              p.inputTokens,
+              p.inputTokens + (interpreted?.inputTokens ?? 0),
 
             outputTokens:
-              p.outputTokens,
+              p.outputTokens + (interpreted?.outputTokens ?? 0),
 
             attempts: 0
           };
@@ -468,6 +492,8 @@ export async function orchestrate(
           ];
 
 
+          const evidence = accumulateEvidence(state.investigation.evidence, batches);
+          // Legacy prompt window; the investigation retains all original passages.
           const sources =
             mergeEvidence(
               batches,
@@ -503,6 +529,7 @@ export async function orchestrate(
 
 
           return {
+            investigation: { ...state.investigation, evidence },
             sources
           };
         }
@@ -951,8 +978,11 @@ export async function orchestrate(
    */
 
   const result =
-    await graph.invoke(
+    interpreted ? await executeCognitive({ store, models, domain, question: normalizedQuestion,
+      conversation: conversationContext, investigation, runId, signal, inlineEvidence, step,
+      inputTokens: interpreted.inputTokens, outputTokens: interpreted.outputTokens }) : await graph.invoke(
       {
+        investigation,
         queries: [],
 
         sources: [],
@@ -1078,7 +1108,7 @@ export async function orchestrate(
       result.review,
 
     workflow:
-      'document-answer-v1',
+      interpreted ? 'cognitive-investigation-v1' : 'document-answer-v1',
 
     status:
       abstained
