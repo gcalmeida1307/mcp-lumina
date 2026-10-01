@@ -77,17 +77,18 @@ test('JSON protocol validation and capability routing fail closed', async () => 
   await assert.rejects(registry.review(request, 'local'), /não autorizada/);
 });
 
-test('text adapter omits JSON response_format; structured adapter requests it', async t => {
+test('text adapter omits JSON format; structured adapter requests it and disables thinking', async t => {
   const bodies: any[] = [];
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
     bodies.push(JSON.parse(String(init.body)));
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] }));
+    return new Response(JSON.stringify({ message: { content: '{}' } }));
   });
   const registry = new ModelRegistry().register(createChatProvider({ ...model('local', true, async () => response()), baseUrl: 'http://127.0.0.1:11434/v1' }));
   await registry.respond(request);
   await registry.structured(request);
-  assert.equal(bodies[0].response_format, undefined);
-  assert.deepEqual(bodies[1].response_format, { type: 'json_object' });
+  assert.equal(bodies[0].think, false);
+  assert.equal(bodies[0].format, undefined);
+  assert.equal(bodies[1].format, 'json');
 });
 
 const doc = describeDocument({ id: 'a', name: 'A.pdf', domain: 'test', hash: 'hash', status: 'ready', createdAt: '', owner: 'u', size: 1, chunks: 1, stages: [] });
@@ -192,7 +193,7 @@ test('Graph opt-in calls Interpreter once and preserves social fast path', async
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
     assert.match(body.messages[0].content, /Interpreter/);
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ ...understanding, objective: 'Localizar prazo', subjects: [], needsContext: false, suggestedOperations: [] }) } }], usage: { prompt_tokens: 10, completion_tokens: 3 } }));
+    return new Response(JSON.stringify({ message: { content: JSON.stringify({ ...understanding, objective: 'Localizar prazo', subjects: [], needsContext: false, suggestedOperations: [] }) }, prompt_eval_count: 10, eval_count: 3 }));
   });
   const store = {
     cacheNamespace: crypto.randomUUID(), documents: async () => [], chunks: async () => [],

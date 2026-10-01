@@ -76,26 +76,37 @@ export class ModelRegistry {
     const candidates = this.candidates(role, input, author).sort((a, b) => Number(this.failed.has(a.id)) - Number(this.failed.has(b.id)));
     for (let i = 0; i < candidates.length; i++) {
       input.signal?.throwIfAborted();
-      const canFallback = this.policy.allowFallback && i < candidates.length - 1;
+      // Only a local candidate needs a short leash before falling back; a remote candidate is the
+      // reliable option and should get the real remaining budget regardless of its position in the list.
+      const canFallback = this.policy.allowFallback && candidates[i].local && i < candidates.length - 1;
       const attemptTimeout = canFallback ? AbortSignal.timeout(this.policy.fallbackTimeoutMs ?? 30000) : undefined;
-      try {
-        const signal = attemptTimeout
-          ? input.signal ? AbortSignal.any([input.signal, attemptTimeout]) : attemptTimeout
-          : input.signal;
-        const result = await candidates[i].invoke({ ...input, signal });
-        signal?.throwIfAborted();
-        // Validate the protocol even when a custom adapter returns only text.
-        if (format === 'json') {
-          try {
-            result.data = JSON.parse(result.text);
-            if (input.validate) result.data = input.validate(result.data);
-          } catch { throw new ModelOutputError(); }
+      const signal = attemptTimeout
+        ? input.signal ? AbortSignal.any([input.signal, attemptTimeout]) : attemptTimeout
+        : input.signal;
+      let error: unknown;
+      // With no further fallback left, retry this same candidate once on a malformed reply before giving up.
+      const attempts = i === candidates.length - 1 ? 2 : 1;
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        try {
+          const result = await candidates[i].invoke({ ...input, signal });
+          signal?.throwIfAborted();
+          // Validate the protocol even when a custom adapter returns only text.
+          if (format === 'json') {
+            try {
+              result.data = JSON.parse(result.text);
+              if (input.validate) result.data = input.validate(result.data);
+            } catch { throw new ModelOutputError(); }
+          }
+          return { ...result, modelId: candidates[i].id, family: candidates[i].family };
+        } catch (caught) {
+          error = caught;
+          if (!(caught instanceof ModelOutputError) || input.signal?.aborted) break;
         }
-        return { ...result, modelId: candidates[i].id, family: candidates[i].family };
-      } catch (error) {
-        if (attemptTimeout?.aborted || error instanceof ModelOutputError) this.failed.add(candidates[i].id);
-        if (input.signal?.aborted || !this.policy.allowFallback || i === candidates.length - 1) throw error;
       }
+      // Local inference is a single serialized slot: a client-side abort does not free it, so a
+      // stale request keeps the server busy. Never risk queuing behind it again this investigation.
+      if (candidates[i].local || attemptTimeout?.aborted || error instanceof ModelOutputError) this.failed.add(candidates[i].id);
+      if (input.signal?.aborted || !this.policy.allowFallback || i === candidates.length - 1) throw error;
     }
     throw new Error('Nenhum modelo disponível.');
   }

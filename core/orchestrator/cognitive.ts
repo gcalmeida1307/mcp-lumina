@@ -49,6 +49,7 @@ export async function executeCognitive(input: {
   const ids = scope.map(r => r.id);
   let sources: Evidence[] = [], answer = '', accepted = false, abstain = true, review: RunReview | undefined;
   let feedback: string[] = [];
+  let bestPartial: { answer: string; review: RunReview } | undefined;
   const account = (result: ModelResult) => {
     inputTokens += result.inputTokens; outputTokens += result.outputTokens;
     state.usage.tokens = inputTokens + outputTokens;
@@ -63,32 +64,50 @@ export async function executeCognitive(input: {
     state.usage.steps++;
   };
   const context = () => JSON.stringify({ question: input.question, conversation: input.conversation,
-    understanding, resources: scope, observations: state.observations, gaps: feedback,
+    understanding, resources: scope.map(r => ({ id: r.id, name: r.name, domains: r.domains, capabilities: r.capabilities })),
+    observations: state.observations, gaps: feedback,
     sources: sources.map((s, i) => ({ ...s, citation: i + 1 })) });
   const collect = async (raw: unknown) => {
     check();
-    const operation = validateOperation(raw, ['READ', 'SEARCH'], ids);
-    if (!operation.resourceIds.length) throw new Error('Selecione recursos para a operação.');
+    const parsed = validateOperation(raw, ['READ', 'SEARCH'], ids);
+    // A SEARCH without explicit resources still means "search the available scope"; READ cannot recover from that.
+    const operation = parsed.resourceIds.length || parsed.name !== 'SEARCH' ? parsed : { ...parsed, resourceIds: ids };
+    if (!operation.resourceIds.length) return;
     if (operation.resourceIds.some(id => !scope.find(r => r.id === id)?.capabilities.includes(operation.name))) throw new Error('Capacidade indisponível.');
     const parameters = z.object({ offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(12).default(4), query: z.string().min(1).max(2000).optional() }).parse(operation.parameters);
-    for (const id of operation.resourceIds) {
+    const hasInline = operation.resourceIds.some(id => input.inlineEvidence?.some(e => e.documentId === id));
+    if (operation.name === 'SEARCH' && !hasInline) {
+      // Rank candidates across every targeted document together; a per-document loop forces noise from unrelated resources.
       signal.throwIfAborted();
-      if (state.usage.toolCalls >= state.budget.maxToolCalls) break;
-      state.usage.toolCalls++;
-      const inline = input.inlineEvidence?.filter(e => e.documentId === id);
-      const batch = inline?.length ? operation.name === 'READ' ? inline.slice(parameters.offset, parameters.offset + parameters.limit)
-        : rankCandidates(parameters.query ?? operation.objective, inline.map(e => ({ id: e.id, documentId: e.documentId, domain, title: '', text: e.text, index: e.chunk - 1 })))
-          .slice(0, parameters.limit).map(({ chunk, score }) => ({ ...inline.find(e => e.id === chunk.id)!, score }))
-        : operation.name === 'SEARCH' ? await retrieve(store, parameters.query ?? operation.objective, domain, [id], parameters.limit)
-        : (await store.readChunks(domain, [id], parameters.offset, parameters.limit)).map(c => ({
-          id: c.id, documentId: c.documentId, title: c.title, text: c.text, chunk: c.index + 1,
-          page: c.page, sourceUrl: c.sourceUrl, capturedAt: c.capturedAt, score: 1
-        }));
-      signal.throwIfAborted();
-      state.evidence = accumulateEvidence(state.evidence, [batch]);
-      state.observations.push({ operationId: crypto.randomUUID(), status: batch.length ? 'completed' : 'insufficient',
-        resourceIds: [id], evidenceIds: batch.map(e => e.id), summary: `${operation.name}; offset=${parameters.offset}; ${batch.length} trecho(s).` });
-      step(operation.name === 'READ' ? 'Ler' : 'Buscar', `${id}: ${batch.length} trecho(s); offset=${parameters.offset}.`);
+      if (state.usage.toolCalls < state.budget.maxToolCalls) {
+        state.usage.toolCalls++;
+        const batch = await retrieve(store, parameters.query ?? operation.objective, domain, operation.resourceIds, parameters.limit);
+        signal.throwIfAborted();
+        state.evidence = accumulateEvidence(state.evidence, [batch]);
+        state.observations.push({ operationId: crypto.randomUUID(), status: batch.length ? 'completed' : 'insufficient',
+          resourceIds: operation.resourceIds, evidenceIds: batch.map(e => e.id), summary: `SEARCH; ${batch.length} trecho(s) entre ${operation.resourceIds.length} recurso(s).` });
+        step('Buscar', `${batch.length} trecho(s) relevantes entre ${operation.resourceIds.length} recurso(s).`);
+      }
+    } else {
+      for (const id of operation.resourceIds) {
+        signal.throwIfAborted();
+        if (state.usage.toolCalls >= state.budget.maxToolCalls) break;
+        state.usage.toolCalls++;
+        const inline = input.inlineEvidence?.filter(e => e.documentId === id);
+        const batch = inline?.length ? operation.name === 'READ' ? inline.slice(parameters.offset, parameters.offset + parameters.limit)
+          : rankCandidates(parameters.query ?? operation.objective, inline.map(e => ({ id: e.id, documentId: e.documentId, domain, title: '', text: e.text, index: e.chunk - 1 })))
+            .slice(0, parameters.limit).map(({ chunk, score }) => ({ ...inline.find(e => e.id === chunk.id)!, score }))
+          : operation.name === 'SEARCH' ? await retrieve(store, parameters.query ?? operation.objective, domain, [id], parameters.limit)
+          : (await store.readChunks(domain, [id], parameters.offset, parameters.limit)).map(c => ({
+            id: c.id, documentId: c.documentId, title: c.title, text: c.text, chunk: c.index + 1,
+            page: c.page, sourceUrl: c.sourceUrl, capturedAt: c.capturedAt, score: 1
+          }));
+        signal.throwIfAborted();
+        state.evidence = accumulateEvidence(state.evidence, [batch]);
+        state.observations.push({ operationId: crypto.randomUUID(), status: batch.length ? 'completed' : 'insufficient',
+          resourceIds: [id], evidenceIds: batch.map(e => e.id), summary: `${operation.name}; offset=${parameters.offset}; ${batch.length} trecho(s).` });
+        step(operation.name === 'READ' ? 'Ler' : 'Buscar', `${id}: ${batch.length} trecho(s); offset=${parameters.offset}.`);
+      }
     }
     // Most recently collected passages enter the prompt; originals remain accumulated.
     sources = evidenceWindow([...state.evidence].reverse());
@@ -155,9 +174,14 @@ export async function executeCognitive(input: {
           account(verified);
           const checked = reviewSchema.parse(verified.data);
           const claims = checked.claims.map(c => ({ ...c, verdict: validCitations(c.citations, sources.length) && c.citations.every(id => parsed.citations.includes(id)) ? c.verdict : 'fail' as const }));
-          const coverage = claims.length ? claims.filter(c => c.verdict === 'pass').length / claims.length : 0;
-          accepted = checked.verdict === 'pass' && coverage === 1 && !checked.gaps.length;
-          review = { runId: input.runId, verdict: accepted ? 'pass' : 'uncertain', coverage, claims, reviewer: 'cognitive-review-v1', createdAt: new Date().toISOString() };
+          // No claims to check still counts as supported; only reject when nothing in the answer is sustained.
+          const coverage = claims.length ? claims.filter(c => c.verdict === 'pass').length / claims.length : 1;
+          const perfect = checked.verdict === 'pass' && coverage === 1 && !checked.gaps.length;
+          const supported = checked.verdict !== 'fail' && (claims.length === 0 || claims.some(c => c.verdict === 'pass'));
+          // A gap still worth chasing keeps retrying; only the last attempt settles for a partially supported answer.
+          accepted = perfect || (attempt === state.budget.maxRetries && supported);
+          review = { runId: input.runId, verdict: accepted ? (perfect ? 'pass' : 'uncertain') : 'fail', coverage, claims, reviewer: 'cognitive-review-v1', createdAt: new Date().toISOString() };
+          if (supported) bestPartial = { answer, review };
           feedback = [...checked.gaps, ...claims.filter(c => c.verdict !== 'pass').map(c => c.reason)];
           if (accepted) break;
         }
@@ -169,10 +193,15 @@ export async function executeCognitive(input: {
     step('Limitar', error instanceof Error ? error.message : 'Investigação interrompida.');
     accepted = false;
   }
-  if (!accepted) {
+  let partial = false;
+  if (!accepted && bestPartial) {
+    // Budget ran out before the final attempt; a sustained partial answer still beats a hard abstention.
+    answer = bestPartial.answer; review = bestPartial.review; accepted = true; abstain = false; partial = true;
+  } else if (!accepted) {
     answer = 'Não encontrei evidências suficientes para validar uma resposta ao objetivo solicitado.';
     abstain = true;
   }
-  step('Verificar', accepted ? 'Resposta validada.' : 'Abstenção: evidências ou orçamento insuficientes.');
+  step('Verificar', partial ? 'Resposta parcial mantida; orçamento esgotado antes da verificação final.'
+    : accepted ? 'Resposta validada.' : 'Abstenção: evidências ou orçamento insuficientes.');
   return { sources, answer, accepted, abstain, review, inputTokens, outputTokens };
 }

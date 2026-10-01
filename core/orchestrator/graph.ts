@@ -249,8 +249,9 @@ export async function orchestrate(
   const signal = AbortSignal.timeout(investigation.budget.timeoutMs);
   const inlineEvidence: Evidence[] = [];
   if (config.COGNITIVE_INTERPRETER && llm) {
+    // Only genuinely pasted text (fenced blocks) becomes a user-text resource; a plain question is not its own evidence.
     const blocks = [...normalizedQuestion.matchAll(/\x60{3}[^\n]*\n([\s\S]*?)\x60{3}/g)].map(match => match[1].trim());
-    for (const [index, text] of (blocks.length ? blocks : [normalizedQuestion]).entries()) {
+    for (const [index, text] of blocks.entries()) {
       const id = 'user-text:' + runId + ':' + index;
       investigation.resources.push({ id, kind: 'document', name: 'Texto da mensagem ' + (index + 1), domains: [domain],
         roles: ['context'], capabilities: ['READ', 'SEARCH'], provenance: { source: 'user-text' }, metadata: {} });
@@ -262,6 +263,11 @@ export async function orchestrate(
   }
   const interpreted = config.COGNITIVE_INTERPRETER && llm
     ? await interpret(models, { message: normalizedQuestion, history, domain, resources: investigation.resources }, signal)
+        .catch(error => {
+          // The legacy router below is the safety net when the Interpreter itself cannot produce a valid plan.
+          step('Entender', 'Interpreter indisponível (' + (error instanceof Error ? error.message : 'erro desconhecido') + '); usando roteamento padrão.');
+          return undefined;
+        })
     : undefined;
   investigation.understanding = interpreted?.understanding;
   const understanding = interpreted?.understanding;

@@ -17,6 +17,8 @@ const schema = z.object({
   MODEL_MODE: z.enum(['LOCAL', 'HYBRID', 'ENSEMBLE']).default('LOCAL'),
   MODEL_ALLOW_REMOTE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   MODEL_ALLOW_FALLBACK: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  // CPU-only local inference can be far slower than this; a short window avoids taxing every call before an authorized fallback.
+  MODEL_FALLBACK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(12000),
   MODEL_FAMILY: z.string().default(''),
   MODEL_VISION: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   MODEL_CODING: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),

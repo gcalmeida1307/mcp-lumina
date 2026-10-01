@@ -71,7 +71,7 @@ test('comparison uses cognitive scope and collects again after reviewer feedback
       if (generation === 2) assert.match(input.gaps.join(' '), /multa/);
       data = { answer: generation === 1 ? 'Existe multa. [1] [2]' : 'Ambos mencionam registro de jornada. [1] [2]', citations: [1, 2], abstain: false, findings: [{ leftCitation: 1, rightCitation: 2, relation: 'registro', condition: 'nos trechos', conclusion: 'Ambos mencionam registro.' }] };
     }
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(data) } }], usage: {} }));
+    return new Response(JSON.stringify({ message: { content: JSON.stringify(data) }, prompt_eval_count: 1, eval_count: 1 }));
   });
   const run = await orchestrate(fakeStore(), { id: 'test', domains: ['direito'], roles: ['viewer'] }, 'Quando comparo SAAE_2026_2027.pdf com VADE, quais problemas posso ter?', 'direito', false);
   assert.equal(generation, 2);

@@ -10,7 +10,8 @@ export type InvestigationState = {
 };
 export function createInvestigation(resources: ResourceDescriptor[] = []): InvestigationState {
   return { resources, evidence: [], observations: [],
-    budget: { maxSteps: 12, maxToolCalls: 8, maxTokens: 24000, maxRetries: 2, timeoutMs: 180000 },
+    // Each step now costs a couple of seconds (fast remote fallback) rather than minutes, so allow more of them.
+    budget: { maxSteps: 20, maxToolCalls: 12, maxTokens: 60000, maxRetries: 2, timeoutMs: 180000 },
     usage: { steps: 0, toolCalls: 0, tokens: 0, retries: 0 }, startedAt: Date.now() };
 }
 /** Preserve original passages. Prompt selection is a separate, bounded view. */
