@@ -6,6 +6,7 @@ import { initObjects } from '../data/storage/objects.js';
 import { stopTelemetry } from '../observability/telemetry.js';
 import { initAuth } from '../security/auth/schema.js';
 let store = new Store();
+console.log('Preparando o banco de dados do LUMINA. Aguarde a mensagem de disponibilidade.');
 try { await store.init(); }
 catch (error) {
   if (config.NODE_ENV !== 'development' || !config.DATABASE_URL || config.AUTH_MODE === 'native') throw error;

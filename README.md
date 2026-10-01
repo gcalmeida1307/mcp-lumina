@@ -1,5 +1,33 @@
 # LUMINA
 
+## Inicialização e acesso
+
+No Windows, execute `./start.ps1` e abra `http://127.0.0.1:5173`.
+A preparação do banco pode demorar alguns minutos; a página aguarda a API por
+até três minutos e oferece uma nova tentativa se ela ainda não estiver pronta.
+Mantenha o terminal aberto enquanto usa o aplicativo.
+
+Em autenticação nativa, preserve `LUMINA_ENCRYPTION_KEY` junto ao backup do banco:
+substituir essa chave impede a leitura das identidades e dos segredos de 2FA já
+armazenados. Uma chave nova não recupera dados cifrados com a anterior.
+Não publique o `.env` nem compartilhe chaves e senhas em mensagens.
+
+O login informa quando falta o código do autenticador. Contas que exigem troca
+de senha ou cadastro de 2FA concluem essas etapas antes de acessar o workspace.
+Ativação e redefinição de senha usam os tokens fornecidos pelo administrador,
+pela opção **Ativar conta ou redefinir senha**.
+
+Quando há fallback autorizado e outro modelo elegível, cada tentativa anterior
+ao último modelo tem limite de 30 segundos. Isso reserva tempo para a alternativa
+dentro do orçamento da investigação. Sem fallback, os limites do provedor permanecem.
+Um modelo que excedeu esse limite ou retornou JSON incompatível com o contrato da
+etapa fica por último nas etapas seguintes da mesma
+consulta; uma nova consulta volta a considerar a prioridade local normal.
+Interpretação, seleção de operações, geração e revisão validam o contrato antes
+de aceitar um provedor. O fallback continua exigindo autorização da política e
+não permite referências a documentos fora do escopo. Erros de consulta exibem
+uma referência de requisição para diagnóstico.
+
 > O LUMINA não deve procurar uma resposta. Deve compreender o problema, descobrir o conhecimento necessário, usar os recursos disponíveis, verificar o que descobriu e então responder.
 
 O fluxo cognitivo documental é o padrão quando há um modelo configurado: Interpreter,

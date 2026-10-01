@@ -11,7 +11,7 @@ import {
   Mic, Volume2, Square
 } from 'lucide-react';
 import { initializeAuth, authMode, changePassword, login, nativeLogin, logout } from './auth';
-import { api, ask } from './api';
+import { api, ask, ApiError } from './api';
 import type { ConversationTurn, DocumentRecord, Run, TraceStep, Evidence } from '../../core/types';
 import './styles.css';
 import { NeuralExplorer, type NeuralMap } from './KnowledgeExplorer';
@@ -21,6 +21,8 @@ import { VoiceExperience } from './VoiceExperience';
 import { WebSources } from './WebSources';
 import { OfflineReader } from './OfflineReader';
 import { conversationId as newConversationId } from './conversation-id';
+import { storedConversation } from './conversation-storage';
+import { NativeAccount, type Account } from './NativeAccount';
 import { ResponseVisual } from './ResponseVisual';
 import { MetricsDashboard } from './MetricsDashboard';
 
@@ -50,12 +52,13 @@ function App() {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [metricsRuns, setMetricsRuns] = useState<Run[]>([]);
-  const [me, setMe] = useState<{ id: string; roles: string[]; authMode: string }>();
+  const [me, setMe] = useState<{ id: string; roles: string[]; authMode: string; user?: Account }>();
   const [error, setError] = useState('');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [loginBusy, setLoginBusy] = useState(false);
+  const [recoverAccount, setRecoverAccount] = useState(false);
   const [notice, setNotice] = useState('');
   const [booting, setBooting] = useState(true);
   const [offlineId, setOfflineId] = useState<string>();
@@ -64,9 +67,7 @@ function App() {
   const [selectedDocument, setSelectedDocument] = useState<string>();
   const [search, setSearch] = useState('');
   const [question, setQuestion] = useState('');
-  const [conversationId, setConversationId] = useState(() => {
-    try { return sessionStorage.getItem('lumina:conversation:geral') ?? newConversationId(); } catch { return newConversationId(); }
-  });
+  const [conversationId, setConversationId] = useState(newConversationId);
   const [agent, setAgent] = useState(false);
   const [asking, setAsking] = useState(false);
   const [steps, setSteps] = useState<TraceStep[]>([]);
@@ -109,25 +110,24 @@ function App() {
     void (async () => {
       try {
         await initializeAuth();
-        const [user, list] = await Promise.all([api<any>('/me'), api<Domain[]>('/domains')]);
-        setMe(user); setDomains(list);
+        const user = await api<any>('/me');
+        setMe(user);
+        if (user.user && (user.user.must_change_password || !user.user.two_factor_enabled)) return;
+        const list = await api<Domain[]>('/domains');
+        setDomains(list);
         const initial = list[0]?.id;
         if (initial) { selection.current = initial; setDomain(initial); await refresh(initial); }
-      } catch (e) { setError((e as Error).message); } finally { setBooting(false); }
+      } catch (e) { if (!(e instanceof ApiError && e.status === 401)) setError((e as Error).message); } finally { setBooting(false); }
     })();
   }, []);
   useEffect(() => {
     if (!me || !domains.length) return;
-    let nextConversation: string = newConversationId();
-    try { nextConversation = sessionStorage.getItem('lumina:conversation:' + domain) ?? nextConversation; } catch { /* storage is optional */ }
+    const nextConversation = storedConversation(me.id, domain);
     setConversationId(nextConversation);
     setChat([]); setSource(undefined); setSelectedDocument(undefined); setOfflineId(undefined);
     setMcpServer(''); setTools([]); setMcpResult('');
     void refresh(domain).catch(e => setError(e.message));
-  }, [domain, me]);
-  useEffect(() => {
-    try { sessionStorage.setItem('lumina:conversation:' + domain, conversationId); } catch { /* storage is optional */ }
-  }, [domain, conversationId]);
+  }, [domain, me?.id, domains.length]);
   useEffect(() => {
     if (page !== 'chat') return;
     setChat(runs.filter(run => run.domain === domain && run.conversationId === conversationId).reverse());
@@ -176,7 +176,7 @@ function App() {
     if (q.length < 2 || q.length > 4000) throw new Error('Use uma pergunta entre 2 e 4000 caracteres.');
     if (requestBusy.current) throw new Error('Aguarde a resposta atual antes de perguntar novamente.');
     const forDomain = domain;
-    requestBusy.current = true; setAsking(true); setSteps([]); setQuestion('');
+    requestBusy.current = true; setAsking(true); setSteps([]); setError(''); setQuestion('');
     try {
       const history: ConversationTurn[] = chat.slice(-6).map(run => ({ question: run.question, answer: run.answer }));
       const run = await ask(q, forDomain, agent, history, conversationId, step => { if (!signal?.aborted && selection.current === forDomain) setSteps(old => [...old, step]); }, signal);
@@ -212,7 +212,9 @@ function App() {
   const averageLatency = runs.length ? (runs.reduce((s, r) => s + r.durationMs, 0) / runs.length / 1000).toFixed(2) + ' s' : '—';
 
   if (booting) return <div className="boot"><img src="/lumina.svg" alt="" /><h1>LUMINA</h1><LoaderCircle className="spin" /><p>Preparando seu espaço de conhecimento</p></div>;
-  if (!me) return <main className="login-screen"><section className="login-panel"><div className="login-mark"><img src="/lumina.svg" alt="" /></div><div className="eyebrow"><span /> ACESSO INSTITUCIONAL</div><h1>Entre no LUMINA</h1><p>{error || (authMode() === 'native' ? 'Use sua matrícula ou e-mail e a senha cadastrada.' : 'Use sua identidade institucional para acessar os módulos autorizados.')}</p>{authMode() === 'native' ? <form onSubmit={async event => { event.preventDefault(); if (loginBusy) return; setLoginBusy(true); setError(''); try { await nativeLogin(identifier, password, otp); location.reload(); } catch (e) { setError((e as Error).message); } finally { setLoginBusy(false); } }}><label>Matrícula ou e-mail<input value={identifier} onChange={event => setIdentifier(event.target.value)} autoComplete="username" required /></label><label>Senha<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required /></label><label>Código 2FA <span>(se habilitado)</span><input value={otp} onChange={event => setOtp(event.target.value)} inputMode="numeric" maxLength={6} autoComplete="one-time-code" /></label><button className="button primary login-button" type="submit" disabled={loginBusy}><LogIn size={17} />{loginBusy ? 'Entrando...' : 'Entrar'}</button></form> : <button className="button primary login-button" onClick={() => void login().catch(e => setError(e.message))}><LogIn size={17} />Entrar com identidade institucional</button>}<small>{authMode() === 'native' ? 'Acesso protegido pelo PostgreSQL e pelo segundo fator configurado na conta.' : 'Seu acesso, senha e troca obrigatória de senha são gerenciados com segurança pelo provedor institucional.'}</small><button className="button ghost" onClick={() => location.reload()}>Tentar novamente</button></section></main>;
+  if (me?.user && (me.user.must_change_password || !me.user.two_factor_enabled)) return <main className="login-screen"><section className="login-panel"><h1>Proteja sua conta</h1><NativeAccount user={me.user} onDone={() => location.reload()} /><button className="button ghost" onClick={() => void logout().catch(e => setError(e.message))}>Sair</button>{error && <p role="alert">{error}</p>}</section></main>;
+  if (!me && recoverAccount) return <main className="login-screen"><section className="login-panel"><h1>Recuperar acesso</h1><NativeAccount onDone={() => location.reload()} /><button className="button ghost" onClick={() => setRecoverAccount(false)}>Voltar ao login</button></section></main>;
+  if (!me) return <main className="login-screen"><section className="login-panel"><div className="login-mark"><img src="/lumina.svg" alt="" /></div><div className="eyebrow"><span /> ACESSO INSTITUCIONAL</div><h1>Entre no LUMINA</h1><p>{error || (authMode() === 'native' ? 'Use sua matrícula ou e-mail e a senha cadastrada.' : 'Use sua identidade institucional para acessar os módulos autorizados.')}</p>{authMode() === 'native' ? <form onSubmit={async event => { event.preventDefault(); if (loginBusy) return; setLoginBusy(true); setError(''); try { await nativeLogin(identifier, password, otp); location.reload(); } catch (e) { setError((e as Error).message); } finally { setLoginBusy(false); } }}><label>Matrícula ou e-mail<input value={identifier} onChange={event => setIdentifier(event.target.value)} autoComplete="username" required /></label><label>Senha<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required /></label><label>Código 2FA <span>(se habilitado)</span><input value={otp} onChange={event => setOtp(event.target.value)} inputMode="numeric" maxLength={6} autoComplete="one-time-code" /></label><button className="button primary login-button" type="submit" disabled={loginBusy}><LogIn size={17} />{loginBusy ? 'Entrando...' : 'Entrar'}</button></form> : <button className="button primary login-button" onClick={() => void login().catch(e => setError(e.message))}><LogIn size={17} />Entrar com identidade institucional</button>}<small>{authMode() === 'native' ? 'Acesso protegido pelo PostgreSQL e pelo segundo fator configurado na conta.' : 'Seu acesso, senha e troca obrigatória de senha são gerenciados com segurança pelo provedor institucional.'}</small>{authMode() === 'native' && <button className="button ghost" onClick={() => setRecoverAccount(true)}>Ativar conta ou redefinir senha</button>}<button className="button ghost" onClick={() => location.reload()}>Tentar novamente</button></section></main>;
   return <div className="app">
     {sidebar && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setSidebar(false)} />}
     <aside className={'sidebar ' + (sidebar ? 'open' : '')}>
@@ -260,7 +262,7 @@ function App() {
             return <div key={name} className={'timeline-step ' + (stage?.status ?? (active ? 'processing' : 'waiting'))}><span className="timeline-dot">{stage?.status === 'done' ? <Check size={15} /> : stage?.status === 'failed' ? <X size={15} /> : active ? <LoaderCircle size={15} className="spin" /> : <span>{i + 1}</span>}</span><div><strong>{name}</strong><p>{stage?.detail ?? (active ? 'Processando...' : 'Aguardando etapa anterior')}</p></div>{stage && <time>{new Date(stage.at).toLocaleTimeString('pt-BR')}</time>}</div>;
           })}</div>{selected.error && <div className="inline-alert"><AlertCircle size={17} />{selected.error}</div>}</section></div>}
         </>}
-        {page === 'chat' && <div className={'chat-layout ' + (source ? 'with-source' : '')}><section className="panel chat-panel"><div className="chat-top"><div><span className="lumina-mini"><Sparkles size={17} /></span><strong>LUMINA</strong>{chat.length > 0 && <Pill tone="violet">Contexto restaurado</Pill>}</div><button className="text-button" disabled={asking} onClick={() => { const next = newConversationId(); setConversationId(next); setChat([]); setSource(undefined); }}>Nova conversa <Plus size={15} /></button></div><div className="chat-body">
+        {page === 'chat' && <div className={'chat-layout ' + (source ? 'with-source' : '')}><section className="panel chat-panel"><div className="chat-top"><div><span className="lumina-mini"><Sparkles size={17} /></span><strong>LUMINA</strong>{chat.length > 0 && <Pill tone="violet">Contexto restaurado</Pill>}</div><button className="text-button" disabled={asking} onClick={() => { const next = storedConversation(me.id, domain, true); setConversationId(next); setChat([]); setSource(undefined); }}>Nova conversa <Plus size={15} /></button></div><div className="chat-body">
           {!chat.length && !asking && <div className="chat-welcome"><div className="welcome-glyph"><Sparkles size={32} /></div><div className="eyebrow">SEU CONHECIMENTO, MAIS PRÓXIMO</div><h2>O que vamos descobrir?</h2><p>{ready ? 'Faça uma pergunta sobre os documentos deste domínio. Cada resposta começa pelas fontes.' : 'Adicione documentos neste domínio para começar. As respostas serão baseadas nas suas fontes.'}</p><div className="suggestions">{['Quais são os principais pontos dos documentos?', 'Que procedimentos estão descritos na base?', 'Quais informações sustentam essa decisão?'].map(q => <button key={q} onClick={() => setQuestion(q)}>{q}<ArrowUpRight size={15} /></button>)}</div>{!ready && <button className="text-button accent" disabled={!allowedWrite} onClick={() => setUploadOpen(true)}><Plus size={15} />Adicionar documento</button>}</div>}
           {chat.map((run, index) => <article className="exchange" key={run.id}><div className="user-message">{run.question}</div><div className="assistant-heading"><span className="lumina-mini"><Sparkles size={15} /></span><strong>LUMINA</strong><span>{!run.sources.length && run.status === 'completed' ? 'Conversa' : run.mode === 'extractive' ? 'Trechos da sua base' : 'Resposta com evidências'}</span><button className="voice-action" aria-label={speakingId === run.id ? 'Parar leitura' : 'Ouvir resposta'} disabled={asking} onClick={() => speakAnswer(run)}>{speakingId === run.id ? <Square size={13} /> : <Volume2 size={15} />}</button></div><div className="answer">{run.answer}</div>{index === chat.length - 1 && <ResponseVisual key={'visual-' + run.id} answer={run.answer} />}{run.sources.length > 0 && <div className="sources"><span>FONTES CONSULTADAS</span><div>{run.sources.map((s, i) => <button key={s.id} onClick={() => setSource(s)}><span>{i + 1}</span><FileText size={13} />{s.title}<ArrowUpRight size={13} /></button>)}</div></div>}<div className="answer-footer"><span><Clock3 size={13} />{(run.durationMs / 1000).toFixed(1)} s · {run.steps.length} etapas</span><div><button className={'icon-button ' + (run.feedback === 1 ? 'chosen' : '')} aria-label="Resposta útil" onClick={() => void feedback(run, 1)}><ThumbsUp size={14} /></button><button className={'icon-button ' + (run.feedback === -1 ? 'chosen' : '')} aria-label="Resposta não foi útil" onClick={() => void feedback(run, -1)}><ThumbsDown size={14} /></button></div></div><details className="trace-details"><summary>Ver caminho da resposta</summary>{run.steps.map((s, i) => <p key={i}><CheckCircle2 size={13} /><strong>{s.name}</strong> {s.detail}</p>)}</details></article>)}
           {asking && <div className="thinking"><LoaderCircle size={18} className="spin" /><div><strong>Consultando suas fontes...</strong>{steps.map((s, i) => <p key={i}><Check size={13} />{s.name} · {s.detail}</p>)}</div></div>}<div ref={bottom} /></div>
@@ -288,4 +290,6 @@ function App() {
     {confirmDelete && <div className="modal-backdrop"><section className="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><h2 id="delete-title">Excluir documento?</h2><p>O arquivo original e seus trechos serão removidos da base. Respostas anteriores permanecem no histórico de consultas.</p><div className="modal-actions"><button className="button secondary" onClick={() => setConfirmDelete(undefined)}>Cancelar</button><button className="button danger" onClick={() => void removeDocument(confirmDelete)}>Excluir documento</button></div></section></div>}
   </div>;
 }
-createRoot(document.getElementById('root')!).render(<App />);
+const root = import.meta.hot?.data.root ?? createRoot(document.getElementById('root')!);
+if (import.meta.hot) import.meta.hot.data.root = root;
+root.render(<App />);

@@ -22,3 +22,12 @@ export class ModelConfigurationError extends Error {
     this.name = 'ModelConfigurationError';
   }
 }
+
+/** Safe to show in the UI; never contains generated text or validation values. */
+export class ModelOutputError extends Error {
+  readonly code = 'MODEL_OUTPUT_INVALID';
+  constructor() {
+    super('O modelo de IA retornou uma resposta fora do formato esperado. Tente novamente.');
+    this.name = 'ModelOutputError';
+  }
+}

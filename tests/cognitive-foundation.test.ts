@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { ModelRegistry, type ModelProvider } from '../core/llmops/models.js';
+import { ModelOutputError } from '../core/llmops/errors.js';
 import { createChatProvider } from '../core/llmops/registry.js';
 import { interpret } from '../core/orchestrator/interpreter.js';
 import { accumulateEvidence } from '../core/orchestrator/investigation.js';
@@ -33,6 +35,28 @@ test('HYBRID prefers local and uses exactly one authorized fallback', async () =
   assert.deepEqual(calls, ['local', 'cloud']);
 });
 
+test('a slow local attempt leaves the parent budget available for authorized fallback', async () => {
+  const parent = new AbortController();
+  let localCalls = 0;
+  const registry = new ModelRegistry({ mode: 'HYBRID', allowRemote: true, allowFallback: true, fallbackTimeoutMs: 10 })
+    .register(model('local', true, async input => { localCalls++; await delay(1000, undefined, { signal: input.signal }); return response(); }))
+    .register(model('cloud', false, async input => { assert.equal(input.signal?.aborted, false); return response(); }));
+  assert.equal((await registry.understand({ ...request, signal: parent.signal })).modelId, 'cloud');
+  assert.equal(parent.signal.aborted, false);
+  assert.equal((await registry.respond({ ...request, signal: parent.signal })).modelId, 'cloud');
+  assert.equal(localCalls, 1);
+});
+
+test('a caller cancellation during a slow attempt never activates fallback', async () => {
+  const parent = new AbortController();
+  let cloudCalls = 0;
+  const registry = new ModelRegistry({ mode: 'HYBRID', allowRemote: true, allowFallback: true, fallbackTimeoutMs: 1000 })
+    .register(model('local', true, async input => { parent.abort(); input.signal?.throwIfAborted(); return response(); }))
+    .register(model('cloud', false, async () => { cloudCalls++; return response(); }));
+  await assert.rejects(registry.understand({ ...request, signal: parent.signal }));
+  assert.equal(cloudCalls, 0);
+});
+
 test('ENSEMBLE never fans out; review requires different declared model family', async () => {
   const calls: string[] = [];
   const registry = new ModelRegistry({ mode: 'ENSEMBLE', allowRemote: true, allowFallback: false, crossFamilyReview: true });
@@ -48,7 +72,7 @@ test('ENSEMBLE never fans out; review requires different declared model family',
 test('JSON protocol validation and capability routing fail closed', async () => {
   const registry = new ModelRegistry().register(model('local', true, async () => response('natural text')));
   assert.equal((await registry.respond(request)).text, 'natural text');
-  await assert.rejects(registry.structured(request), SyntaxError);
+  await assert.rejects(registry.structured(request), ModelOutputError);
   await assert.rejects(registry.code(request), /Nenhum modelo/);
   await assert.rejects(registry.review(request, 'local'), /não autorizada/);
 });
@@ -81,7 +105,50 @@ test('Interpreter retains mixed greeting context and validates available resourc
   const input = { message: 'Bom dia. Continue aquela análise do documento.', history: [{ question: 'Analise A.pdf', answer: 'Resposta anterior' }], resources: [doc], domain: 'test' };
   assert.equal((await interpret(registry, input)).understanding.needsContext, true);
   assert.match(sent, /Analise A.pdf/);
-  await assert.rejects(interpret(registry, { ...input, domain: 'other' }), /referência indisponível/);
+  await assert.rejects(interpret(registry, { ...input, domain: 'other' }), /fora do formato esperado/);
+});
+
+test('Interpreter accepts string IDs and uses the actual question for an empty objective', async () => {
+  const registry = new ModelRegistry().register(model('local', true, async () => response(JSON.stringify({ ...understanding, objective: '', subjects: ['a'] }))));
+  const result = await interpret(registry, { message: 'Compare SAAE e VADE', history: [], resources: [doc], domain: 'test' });
+  assert.equal(result.understanding.objective, 'Compare SAAE e VADE');
+  assert.deepEqual(result.understanding.subjects, [{ id: 'a' }]);
+  await assert.rejects(interpret(registry, { message: 'Compare', history: [], resources: [], domain: 'test' }), ModelOutputError);
+});
+
+test('Interpreter rejects valid JSON with a missing contract and falls back within the authorized policy', async () => {
+  let localCalls = 0, remoteCalls = 0;
+  const registry = new ModelRegistry({ mode: 'HYBRID', allowRemote: true, allowFallback: true })
+    .register(model('local', true, async () => { localCalls++; return response('{"answer":"wrong contract"}'); }))
+    .register(model('remote', false, async () => { remoteCalls++; return response(JSON.stringify(understanding)); }));
+  const input = { message: 'Compare SAAE com VADE', history: [], resources: [doc], domain: 'test' };
+  assert.equal((await interpret(registry, input)).modelId, 'remote');
+  assert.equal((await interpret(registry, input)).modelId, 'remote');
+  assert.equal(localCalls, 1);
+  assert.equal(remoteCalls, 2);
+});
+
+test('invalid resource references trigger fallback but never cross the authorized resource scope', async () => {
+  const registry = new ModelRegistry({ mode: 'HYBRID', allowRemote: true, allowFallback: true })
+    .register(model('local', true, async () => response(JSON.stringify({ ...understanding, subjects: [{ id: 'not-authorized' }] }))))
+    .register(model('remote', false, async () => response(JSON.stringify(understanding))));
+  const result = await interpret(registry, { message: 'Compare', history: [], resources: [doc], domain: 'test' });
+  assert.equal(result.modelId, 'remote');
+  assert.deepEqual(result.understanding.subjects, [{ id: 'a' }]);
+});
+
+test('schema failures do not authorize cloud use under LOCAL or when fallback is disabled', async () => {
+  for (const policy of [{ mode: 'LOCAL' as const, allowRemote: true, allowFallback: true }, { mode: 'HYBRID' as const, allowRemote: true, allowFallback: false }]) {
+    let remoteCalls = 0;
+    const registry = new ModelRegistry(policy)
+      .register(model('local', true, async () => response('{"answer":"sensitive generated text"}')))
+      .register(model('remote', false, async () => { remoteCalls++; return response(JSON.stringify(understanding)); }));
+    await assert.rejects(interpret(registry, { message: 'Compare', history: [], resources: [doc], domain: 'test' }), error => {
+      assert.doesNotMatch((error as Error).message, /sensitive generated text/);
+      return (error as Error).name === 'ModelOutputError';
+    });
+    assert.equal(remoteCalls, 0);
+  }
 });
 
 test('resource inference cannot overwrite declared metadata or invent authority', () => {

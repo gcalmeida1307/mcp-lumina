@@ -24,6 +24,28 @@ function fixture(replies: unknown[]) {
 const answer = { answer: 'Os textos são semelhantes [1] [2].', citations: [1, 2], abstain: false, findings: [{ leftCitation: 1, rightCitation: 2, relation: 'semelhança', condition: 'nos trechos', conclusion: 'semelhantes' }] };
 const pass = { verdict: 'pass', claims: [{ text: 'semelhantes', citations: [1, 2], verdict: 'pass', reason: 'sustentado' }], gaps: [] };
 
+test('document analysis falls back on malformed structured output and still requires verified citations', async () => {
+  const f = fixture([]);
+  const replies = [{ operation: null }, answer, pass];
+  let localCalls = 0;
+  const models = new ModelRegistry({ mode: 'HYBRID', allowRemote: true, allowFallback: true });
+  const capabilities = { text: true, structuredOutput: true, vision: false, coding: false, embeddings: false, toolUse: false, longContext: false };
+  models.register({ id: 'local', model: 'test', provider: 'ollama', local: true, capabilities, invoke: async () => {
+    localCalls++;
+    return { text: '{"unexpected":"value"}', inputTokens: 1, outputTokens: 1 };
+  } });
+  models.register({ id: 'remote', model: 'test', provider: 'openai', local: false, capabilities, invoke: async () => {
+    assert.ok(replies.length, 'unexpected extra model call');
+    return { text: JSON.stringify(replies.shift()), inputTokens: 1, outputTokens: 1 };
+  } });
+  const result = await executeCognitive({ ...f.input, models });
+  assert.equal(result.accepted, true);
+  assert.equal(result.review?.verdict, 'pass');
+  assert.equal(localCalls, 1);
+  assert.equal(replies.length, 0);
+  assert.equal(new Set(result.sources.map(s => s.documentId)).size, 2);
+});
+
 test('cognitive execution reads both selected sides and returns to collection on review gaps', async () => {
   const f = fixture([{ operation: null }, answer, { ...pass, verdict: 'uncertain', gaps: ['Ler próxima passagem da referência'] },
     { operation: { name: 'READ', objective: 'resolver lacuna', resourceIds: ['b'], parameters: { offset: 1 } } }, { operation: null }, answer, pass]);
