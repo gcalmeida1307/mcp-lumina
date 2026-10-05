@@ -6,6 +6,7 @@ import { initObjects } from '../data/storage/objects.js';
 import { stopTelemetry } from '../observability/telemetry.js';
 import { initAuth } from '../security/auth/schema.js';
 let store = new Store();
+console.log('Preparando o banco de dados do LUMINA. Aguarde a mensagem de disponibilidade.');
 try { await store.init(); }
 catch (error) {
   if (config.NODE_ENV !== 'development' || !config.DATABASE_URL || config.AUTH_MODE === 'native') throw error;
@@ -20,7 +21,7 @@ const { app, ingestion, webImports } = createApp(store);
 void ingestion.resumeEmbeddings().catch(() => console.warn('Não foi possível retomar a indexação vetorial. A busca textual continua disponível.'));
 const server = app.listen(config.PORT, config.HOST, () => {
   console.log('LUMINA disponível em http://' + config.HOST + ':' + config.PORT);
-  console.log(config.AUTH_MODE === 'local' ? 'Modo local de desenvolvimento, sem autenticação. Não exponha à rede.' : 'Autenticação ' + config.AUTH_MODE + ' ativa · ' + store.storageName);
+  console.log(config.AUTH_MODE === 'local' ? 'Acesso direto para testes na rede local, sem autenticação.' : 'Autenticação ' + config.AUTH_MODE + ' ativa · ' + store.storageName);
 });
 let closing = false;
 async function shutdown() {

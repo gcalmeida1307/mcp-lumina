@@ -9,9 +9,10 @@ test('Ollama generation needs no paid key and never falls back to a cloud endpoi
   Object.assign(config, { LLM_PROVIDER: 'ollama', LLM_MODEL: 'test-model', OLLAMA_BASE_URL: 'http://127.0.0.1:11434/v1' });
   assert.equal(generationEnabled(), true);
   const fetch = t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
-    assert.equal(url, 'http://127.0.0.1:11434/v1/chat/completions');
+    assert.equal(url, 'http://127.0.0.1:11434/api/chat');
     assert.equal(new Headers(init?.headers).has('Authorization'), false);
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"answer":"ok"}' } }], usage: { prompt_tokens: 10, completion_tokens: 3 } }));
+    assert.equal(JSON.parse(String(init?.body)).think, false);
+    return new Response(JSON.stringify({ message: { content: '{"answer":"ok"}' }, prompt_eval_count: 10, eval_count: 3 }));
   });
   const result = await generate([{ role: 'user', content: 'test' }]);
   assert.deepEqual(result, { data: { answer: 'ok' }, inputTokens: 10, outputTokens: 3 });

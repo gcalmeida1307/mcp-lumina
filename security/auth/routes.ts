@@ -5,9 +5,14 @@ import type { Store } from '../../data/storage/database.js';
 import { config } from '../../gateway/config.js';
 import { domains } from '../../services/domains.js';
 import { AuthError, AuthService, GLOBAL_ADMIN_CODE, type Session, type AuthUser } from './service.js';
+import { passwordPolicy } from './crypto.js';
 declare global { namespace Express { interface Request { authSession?: Session; authUser?: AuthUser; } } }
 const code = z.string().trim().toUpperCase().regex(/^[A-Z]{2}\d{6}$/);
 const password = z.string().min(1).max(256);
+const newPassword = password.transform(value => {
+  try { passwordPolicy(value); } catch (error) { throw new AuthError((error as Error).message); }
+  return value;
+});
 const token = z.string().min(20).max(200);
 const otp = z.string().regex(/^\d{6}$/);
 const cookieName = 'lumina_session';
@@ -27,12 +32,17 @@ export function nativeAuth(store: Store) {
     if ('token' in result) { setCookie(res, result); res.json({ token: 'http-only-cookie', user: result.user }); }
     else res.json(result);
   });
+  publicRoutes.post('/auto-login', async (req, res) => {
+    if (!config.AUTH_AUTO_LOGIN_CODE) return void res.status(404).json({ error: 'Login automático desativado.' });
+    const session = await service.autoLogin(config.AUTH_AUTO_LOGIN_CODE);
+    setCookie(res, session); res.json({ token: 'http-only-cookie', user: session.user });
+  });
   publicRoutes.post('/requests', async (req, res) => {
     const input = z.object({ name: z.string().trim().min(2).max(150), email: z.email().max(254), requested_module: z.string(), scopes: z.array(z.string()).min(1).max(15) }).parse(req.body);
     res.status(201).json(await service.requestAccess(input.name, input.email, input.requested_module, input.scopes));
   });
   publicRoutes.post('/activation', async (req, res) => {
-    const input = z.object({ user_code: code, activation_token: token, new_password: password }).parse(req.body);
+    const input = z.object({ user_code: code, activation_token: token, new_password: newPassword }).parse(req.body);
     res.json(await service.activate(input.user_code, input.activation_token, input.new_password));
   });
   publicRoutes.post('/activation/resume', async (req, res) => {
@@ -44,7 +54,7 @@ export function nativeAuth(store: Store) {
     res.json(await service.activate2fa(input.user_code, input.activation_token, input.code));
   });
   publicRoutes.post('/password/reset', async (req, res) => {
-    const input = z.object({ user_code: code, reset_token: token, new_password: password }).parse(req.body);
+    const input = z.object({ user_code: code, reset_token: token, new_password: newPassword }).parse(req.body);
     res.json(await service.reset(input.user_code, input.reset_token, input.new_password));
   });
   async function authenticate(req: Request, res: Response, next: NextFunction) {
@@ -62,7 +72,7 @@ export function nativeAuth(store: Store) {
   privateRoutes.post('/logout', async (req, res) => { await service.revoke(req.authSession!); res.clearCookie(cookieName, { path: '/', httpOnly: true, sameSite: 'strict', secure: config.NODE_ENV === 'production' }); res.json({ ok: true }); });
   privateRoutes.post('/token/rotate', async (req, res) => { const session = await service.rotate(req.authSession!); setCookie(res, session); res.json({ token: 'http-only-cookie', user: session.user }); });
   privateRoutes.post('/password', async (req, res) => {
-    const input = z.object({ current_password: password, new_password: password }).parse(req.body);
+    const input = z.object({ current_password: password, new_password: newPassword }).parse(req.body);
     const session = await service.changePassword(req.authSession!, input.current_password, input.new_password);
     setCookie(res, session); res.json({ user: session.user });
   });

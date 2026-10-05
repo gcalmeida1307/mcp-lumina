@@ -8,7 +8,7 @@ const auth = await fetch(backend + '/api/auth/config', { signal: AbortSignal.tim
   if (!response.ok) throw new Error('A API do LUMINA não está disponível na porta 4000.');
   return response.json();
 });
-if (auth.mode !== 'native') throw new Error('Este acesso LAN exige autenticação native. OIDC requer configurar também o endereço de rede no provedor de identidade.');
+if (!['local', 'native'].includes(auth.mode)) throw new Error('Este acesso LAN suporta os modos local e native. OIDC requer configurar também o endereço de rede no provedor de identidade.');
 const page = await fetch(backend, { signal: AbortSignal.timeout(5000) });
 if (!page.ok || !page.headers.get('content-type')?.includes('text/html')) throw new Error('Compile a aplicação com npm run build antes de abrir o acesso LAN.');
 
@@ -34,6 +34,6 @@ server.listen(port, '0.0.0.0', () => {
   for (const addresses of Object.values(networkInterfaces())) for (const address of addresses || []) {
     if (address.family === 'IPv4' && !address.internal && !address.address.startsWith('169.254.')) console.log(`LUMINA na rede: http://${address.address}:${port}`);
   }
-  console.log('Autenticação existente preservada. A API local na porta 4000 deve permanecer em execução.');
+  console.log(auth.mode === 'local' ? 'Acesso direto, sem login. A API na porta 4000 deve permanecer em execução.' : 'Autenticação existente preservada. A API na porta 4000 deve permanecer em execução.');
 });
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));

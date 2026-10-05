@@ -82,11 +82,12 @@ export function rankCandidates(query: string, chunks: Chunk[], vector?: number[]
     return { chunk, score: eligible ? (top > 0 ? textScore + Math.max(0, semantic) * .08 : semantic) : 0 };
   }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.chunk.id.localeCompare(b.chunk.id));
 }
-export async function retrieve(store: Store, query: string, domain: string): Promise<Evidence[]> {
+export async function retrieve(store: Store, query: string, domain: string, documentIds?: string[], limit = 10): Promise<Evidence[]> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 24) throw new Error('Limite de busca inválido.');
   const revision = await store.revision(domain);
-  const key = 'lumina:retrieval:v3:' + createHash('sha256').update(JSON.stringify([store.cacheNamespace, domain, revision, query, config.KNOWLEDGE_ENABLED, config.EMBEDDING_MODEL, config.EMBEDDING_BASE_URL || config.LLM_BASE_URL, embeddingsEnabled()])).digest('hex');
+  const key = 'lumina:retrieval:v5:' + createHash('sha256').update(JSON.stringify([store.cacheNamespace, domain, revision, limit, query, documentIds?.slice().sort(), config.KNOWLEDGE_ENABLED, config.EMBEDDING_MODEL, config.EMBEDDING_BASE_URL || config.LLM_BASE_URL, embeddingsEnabled()])).digest('hex');
   return cached(key, async () => {
-    const chunks = await store.chunks(domain);
+    const chunks = (await store.chunks(domain, documentIds)).filter(chunk => !documentIds || documentIds.includes(chunk.documentId));
     if (!chunks.length) return [];
     const indexed = chunks.filter(c => c.vector && c.embeddingModel === config.EMBEDDING_MODEL);
     let vector: number[] | undefined;
@@ -94,7 +95,8 @@ export async function retrieve(store: Store, query: string, domain: string): Pro
       try { [vector] = await embed([query], { attempts: 1, timeoutMs: 12000 }); }
       catch { /* Text retrieval remains available during vector service failure. */ }
     }
-    const ranked = rankCandidates(query, chunks, vector, config.EMBEDDING_MODEL);
+    const ranked = rankCandidates(query, documentIds ? chunks.map(chunk => ({ ...chunk, title: '' })) : chunks, vector, config.EMBEDDING_MODEL);
+    const titles = new Map(chunks.map(chunk => [chunk.id, chunk.title]));
     // Optional, bounded read of already validated evidence. Never invoke a worker
     // or a model here, and never admit passages that failed query relevance.
     if (config.KNOWLEDGE_ENABLED && store.knowledge && ranked.length) {
@@ -106,8 +108,8 @@ export async function retrieve(store: Store, query: string, domain: string): Pro
         ranked.sort((a, b) => b.score - a.score || a.chunk.id.localeCompare(b.chunk.id));
       } catch { /* Knowledge enrichment is optional; base retrieval stays available. */ }
     }
-    return diversify(ranked).map(({ chunk, score }) => ({
-      id: chunk.id, documentId: chunk.documentId, title: chunk.title, text: chunk.text, chunk: chunk.index + 1, page: chunk.page, score, sourceUrl: chunk.sourceUrl, capturedAt: chunk.capturedAt
+    return diversify(ranked, limit).map(({ chunk, score }) => ({
+      id: chunk.id, documentId: chunk.documentId, title: titles.get(chunk.id) ?? chunk.title, text: chunk.text, chunk: chunk.index + 1, page: chunk.page, score, sourceUrl: chunk.sourceUrl, capturedAt: chunk.capturedAt
     }));
   });
 }
