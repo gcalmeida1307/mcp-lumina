@@ -50,7 +50,7 @@ export function createApp(store: Store) {
     next();
   });
   app.get('/api/health', async (_req, res) => { await store.sql('SELECT 1'); res.json({ status: 'ok', service: 'lumina' }); });
-  app.get('/api/auth/config', (_req, res) => res.json({ mode: config.AUTH_MODE, authority: config.OIDC_ISSUER, clientId: config.OIDC_CLIENT_ID }));
+  app.get('/api/auth/config', (_req, res) => res.json({ mode: config.AUTH_MODE, authority: config.OIDC_ISSUER, clientId: config.OIDC_CLIENT_ID, autoLogin: Boolean(config.AUTH_AUTO_LOGIN_CODE) }));
   app.use('/api', csrf);
   if (config.AUTH_MODE === 'native') app.use('/api/auth', native.publicRoutes);
   app.use('/api', config.AUTH_MODE === 'native' ? native.authenticate : authenticate, rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Limite de requisições atingido. Tente novamente em um minuto.' } }));
@@ -150,7 +150,8 @@ export function createApp(store: Store) {
       const run = await traced('lumina.query', () => orchestrate(store, req.principal, input.question, input.domain, input.agent, persistedHistory, input.conversationId, stream ? s => emit('step', s) : undefined));
       if (stream) { emit('result', run); res.end(); } else res.json(run);
     } catch (error) {
-      const message = error instanceof ProviderHttpError || error instanceof ModelConfigurationError || error instanceof ModelOutputError ? error.message : 'A consulta não foi concluída. Tente novamente ou informe o identificador da requisição ao administrador.';
+      const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+      const message = error instanceof ProviderHttpError || error instanceof ModelConfigurationError || error instanceof ModelOutputError ? error.message : timedOut ? 'O provedor de IA demorou demais para responder. Tente novamente em instantes.' : 'A consulta não foi concluída. Tente novamente ou informe o identificador da requisição ao administrador.';
       console.error(JSON.stringify({ event: 'query.failed', requestId: req.requestId, type: error instanceof Error ? error.name : 'Error', code: error instanceof ModelConfigurationError ? error.code : undefined, providerStatus: error instanceof ProviderHttpError ? error.status : undefined }));
       await store.audit(req.principal.id, 'query.failed', req.requestId);
       if (stream) { emit('error', { error: message, requestId: req.requestId }); res.end(); } else res.status(error instanceof ModelConfigurationError ? 503 : 502).json({ error: message, requestId: req.requestId });

@@ -7,6 +7,8 @@ const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   AUTH_MODE: z.enum(['local', 'native', 'oidc']).default('native'),
   LUMINA_ENCRYPTION_KEY: z.string().default(''),
+  // Skips the login screen and opens a session for this user code with no password; LAN convenience only, never in production.
+  AUTH_AUTO_LOGIN_CODE: z.string().default(''),
   APP_ORIGIN: z.string().url().default('http://localhost:5173'),
   DATA_DIR: z.string().default('data/runtime'),
   DATABASE_URL: z.string().default(''),
@@ -19,6 +21,8 @@ const schema = z.object({
   MODEL_ALLOW_FALLBACK: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   // CPU-only local inference can be far slower than this; a short window avoids taxing every call before an authorized fallback.
   MODEL_FALLBACK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(12000),
+  // Remote models with long answers or reasoning can exceed a minute under load.
+  MODEL_REMOTE_TIMEOUT_MS: z.coerce.number().int().min(10000).max(300000).default(120000),
   MODEL_FAMILY: z.string().default(''),
   MODEL_VISION: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   MODEL_CODING: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
@@ -65,6 +69,9 @@ if (config.AUTH_MODE === 'local' && config.NODE_ENV !== 'development') {
 }
 if (config.AUTH_MODE === 'oidc' && (!config.OIDC_ISSUER || !config.OIDC_JWKS_URL)) {
   throw new Error('Configure OIDC_ISSUER e OIDC_JWKS_URL.');
+}
+if (config.AUTH_AUTO_LOGIN_CODE && config.NODE_ENV === 'production') {
+  throw new Error('AUTH_AUTO_LOGIN_CODE não pode ser usado em produção.');
 }
 export const generationEnabled = () => Boolean(config.LLM_MODEL && (config.LLM_PROVIDER === 'ollama' || (config.LLM_PROVIDER === 'anthropic' ? config.ANTHROPIC_API_KEY : config.LLM_API_KEY)));
 // A local embedding endpoint (e.g. Ollama) needs no paid API key.

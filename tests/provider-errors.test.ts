@@ -3,6 +3,26 @@ import test from 'node:test';
 import { config } from '../gateway/config.js';
 import { generate } from '../core/llmops/provider.js';
 import { ProviderHttpError } from '../core/llmops/errors.js';
+import { answerInstructions, answerSchema } from '../core/llmops/evidence.js';
+
+test('JSON transport preserves the answer contract on endpoints that retain only the last system message', async t => {
+  const original = { ...config };
+  t.after(() => Object.assign(config, original));
+  Object.assign(config, { LLM_PROVIDER: 'openai', LLM_MODEL: 'test', LLM_API_KEY: 'test' });
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    const system = body.messages.filter((message: any) => message.role === 'system');
+    assert.equal(system.length, 1);
+    assert.ok(system[0].content.includes(answerInstructions));
+    assert.match(system[0].content, /JSON válido, sem markdown/);
+    assert.equal(body.messages[0].role, 'system');
+    assert.equal(body.messages[1].content, 'Qual o prazo?');
+    assert.deepEqual(body.response_format, { type: 'json_object' });
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer: 'Cinco dias [1].', citations: [1], abstain: false, findings: [] }) } }] }));
+  });
+  const result = await generate([{ role: 'system', content: answerInstructions }, { role: 'user', content: 'Qual o prazo?' }]);
+  assert.equal(answerSchema.parse(result.data).abstain, false);
+});
 
 test('provider failures retain HTTP status without exposing response bodies or credentials', async t => {
   const original = { LLM_PROVIDER: config.LLM_PROVIDER, LLM_MODEL: config.LLM_MODEL, LLM_API_KEY: config.LLM_API_KEY, ANTHROPIC_API_KEY: config.ANTHROPIC_API_KEY };

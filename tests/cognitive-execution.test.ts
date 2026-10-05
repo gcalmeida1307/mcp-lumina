@@ -48,14 +48,36 @@ test('document analysis falls back on malformed structured output and still requ
 
 test('cognitive execution reads both selected sides and returns to collection on review gaps', async () => {
   const f = fixture([{ operation: null }, answer, { ...pass, verdict: 'uncertain', gaps: ['Ler próxima passagem da referência'] },
-    { operation: { name: 'READ', objective: 'resolver lacuna', resourceIds: ['b'], parameters: { offset: 1 } } }, { operation: null }, answer, pass]);
+    { operation: { name: 'READ', objective: 'resolver lacuna', resourceIds: ['b'], parameters: { offset: 1 } } }, answer, pass]);
   const result = await executeCognitive(f.input);
   assert.equal(result.accepted, true);
   assert.deepEqual(f.reads, [{ domain: 'test', ids: ['a'], offset: 0 }, { domain: 'test', ids: ['b'], offset: 0 }, { domain: 'test', ids: ['b'], offset: 1 }]);
   assert.ok(f.calls[3].messages[1].content.includes('Ler próxima passagem'));
   assert.equal(f.state.evidence.length, 3);
-  assert.equal(result.inputTokens, 71);
+  assert.equal(result.inputTokens, 61);
   assert.ok(result.sources.every(s => ['a', 'b'].includes(s.documentId)));
+});
+
+test('cognitive execution searches each explicitly requested clause instead of reading the document opening', async () => {
+  const f = fixture([{ operation: null }, answer, pass]);
+  f.input.question = 'Explique as cláusulas 23 e 31 e compare com a referência';
+  const chunks = [
+    { id: 'a-23', documentId: 'a', domain: 'test', title: 'a', index: 22, text: 'Cláusula 23. Regras específicas de jornada.' },
+    { id: 'a-31', documentId: 'a', domain: 'test', title: 'a', index: 30, text: 'Cláusula 31. Regras específicas de contribuição.' },
+    { id: 'a-other', documentId: 'a', domain: 'test', title: 'a', index: 0, text: 'Texto introdutório sem as cláusulas solicitadas.' }
+  ];
+  Object.assign(f.input.store, {
+    cacheNamespace: crypto.randomUUID(),
+    revision: async () => 1,
+    chunks: async (_domain: string, ids?: string[]) => chunks.filter(chunk => !ids || ids.includes(chunk.documentId))
+  });
+
+  const result = await executeCognitive(f.input);
+
+  assert.equal(result.accepted, true);
+  assert.ok(result.sources.some(source => source.id === 'a-23'));
+  assert.ok(result.sources.some(source => source.id === 'a-31'));
+  assert.ok(!f.reads.some(read => read.ids.includes('a')), 'the subject should be searched by clause, not read from offset zero');
 });
 
 test('cognitive operations cannot expand the selected scope or execute tools', async () => {

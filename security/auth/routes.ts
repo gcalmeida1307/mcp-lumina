@@ -32,6 +32,11 @@ export function nativeAuth(store: Store) {
     if ('token' in result) { setCookie(res, result); res.json({ token: 'http-only-cookie', user: result.user }); }
     else res.json(result);
   });
+  publicRoutes.post('/auto-login', async (req, res) => {
+    if (!config.AUTH_AUTO_LOGIN_CODE) return void res.status(404).json({ error: 'Login automático desativado.' });
+    const session = await service.autoLogin(config.AUTH_AUTO_LOGIN_CODE);
+    setCookie(res, session); res.json({ token: 'http-only-cookie', user: session.user });
+  });
   publicRoutes.post('/requests', async (req, res) => {
     const input = z.object({ name: z.string().trim().min(2).max(150), email: z.email().max(254), requested_module: z.string(), scopes: z.array(z.string()).min(1).max(15) }).parse(req.body);
     res.status(201).json(await service.requestAccess(input.name, input.email, input.requested_module, input.scopes));

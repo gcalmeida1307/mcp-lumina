@@ -26,7 +26,7 @@ try {
 
     }
 
-    Write-Host 'Iniciando o LUMINA em http://127.0.0.1:5173'
+    Write-Host 'Iniciando o LUMINA em http://127.0.0.1:5174'
 
     Write-Host 'A preparacao do banco pode levar alguns minutos. A pagina aguardara a API automaticamente.'
 

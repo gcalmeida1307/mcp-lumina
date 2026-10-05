@@ -60,6 +60,14 @@ export class AuthService {
     }
     return blocked;
   }
+  // No password/2FA check by design; callers must gate this behind config.AUTH_AUTO_LOGIN_CODE.
+  async autoLogin(code: string) {
+    const row = await this.row(code);
+    if (!row || !row.active) throw new AuthError('Conta de login automático indisponível.', 401);
+    await this.store.sql('UPDATE users SET last_login_at=?,last_seen_at=? WHERE user_code=?', [now(), now(), row.user_code]);
+    await this.store.audit(row.user_code, 'auth.autologin', row.user_code);
+    return this.issue(row, true);
+  }
   async login(identifier: string, password: string, otp: string) {
     await this.enforceInactivity();
     const key = emailLookup(identifier), failure = (await this.store.sql('SELECT * FROM auth_failures WHERE identifier=?', [key]))[0];

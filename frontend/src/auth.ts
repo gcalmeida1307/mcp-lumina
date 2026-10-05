@@ -1,7 +1,9 @@
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts';
 let manager: UserManager | undefined;
 let mode = 'local';
+let autoLoginAvailable = false;
 export const authMode = () => mode;
+export const autoLoginEnabled = () => autoLoginAvailable;
 export async function waitForAuthConfig(timeoutMs = 180_000, retryMs = 2000) {
   const deadline = Date.now() + timeoutMs;
   do {
@@ -21,6 +23,7 @@ export async function waitForAuthConfig(timeoutMs = 180_000, retryMs = 2000) {
 export async function initializeAuth() {
   const config = await waitForAuthConfig();
   mode = config.mode;
+  autoLoginAvailable = Boolean(config.autoLogin);
   if (mode === 'oidc') {
     manager = new UserManager({
       authority: config.authority, client_id: config.clientId,
@@ -42,6 +45,12 @@ export async function authHeaders(): Promise<Record<string, string>> {
   return user && !user.expired ? { Authorization: 'Bearer ' + user.access_token } : {};
 }
 export async function login() { await manager?.signinRedirect(); }
+export async function autoLogin() {
+  const response = await fetch('/api/auth/auto-login', { method: 'POST', headers: { 'X-Lumina-Request': '1' } });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.user) throw new Error(result.error ?? 'Login automático indisponível.');
+  return result;
+}
 export async function nativeLogin(identifier: string, password: string, otp = '') {
   const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Lumina-Request': '1' }, body: JSON.stringify({ identifier, password, otp }) });
   const result = await response.json().catch(() => ({}));

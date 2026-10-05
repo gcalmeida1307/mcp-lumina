@@ -7,7 +7,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "concurrently -k -n api,web \"node --use-system-ca node_modules/tsx/dist/cli.mjs watch gateway/server.ts\" \"vite --host 127.0.0.1\"",
+    "dev": "concurrently -k -n api,web \"node --use-system-ca node_modules/tsx/dist/cli.mjs watch gateway/server.ts\" \"vite --host 0.0.0.0\"",
     "dev:api": "node --use-system-ca node_modules/tsx/dist/cli.mjs watch gateway/server.ts",
     "build": "tsc --noEmit && vite build",
     "start": "node --use-system-ca node_modules/tsx/dist/cli.mjs gateway/server.ts",

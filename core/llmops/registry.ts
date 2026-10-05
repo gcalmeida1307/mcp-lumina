@@ -7,7 +7,7 @@ export function createChatProvider(options: Omit<ModelProvider, 'invoke' | 'embe
   return { ...options, async invoke(input: ModelRequest) {
     // Safety net for a local-only setup with no fallback; with a fallback configured, the local
     // candidate is now blacklisted after a single slow/failed attempt and never retried (see models.ts).
-    const timeout = AbortSignal.timeout(options.local ? 180000 : 60000);
+    const timeout = AbortSignal.timeout(options.local ? 180000 : config.MODEL_REMOTE_TIMEOUT_MS);
     const signal = input.signal ? AbortSignal.any([input.signal, timeout]) : timeout;
     if (options.provider === 'ollama') {
       // Reasoning models (e.g. Qwen3) emit a separate "thinking" trace that can consume the whole
@@ -30,9 +30,14 @@ export function createChatProvider(options: Omit<ModelProvider, 'invoke' | 'embe
       if (typeof text !== 'string' || !text.length) throw new Error('Resposta vazia do provedor.');
       return { text, inputTokens: Number(result.prompt_eval_count ?? 0), outputTokens: Number(result.eval_count ?? 0) };
     }
-    const messages = input.format === 'json'
-      ? [...input.messages, { role: 'system' as const, content: 'Retorne somente JSON válido, sem markdown.' }]
-      : input.messages;
+    // Some OpenAI-compatible endpoints keep only the last system message.
+    // Keep the contract and JSON reminder in one system instruction.
+    const system = input.messages.filter(message => message.role === 'system').map(message => message.content);
+    if (input.format === 'json') system.push('Retorne somente JSON válido, sem markdown.');
+    const messages = [
+      ...(system.length ? [{ role: 'system' as const, content: system.join('\n\n') }] : []),
+      ...input.messages.filter(message => message.role !== 'system')
+    ];
     const anthropic = options.provider === 'anthropic';
     const body = anthropic ? {
       model: options.model, system: messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n'),

@@ -2,10 +2,19 @@
 
 ## Inicialização e acesso
 
-No Windows, execute `./start.ps1` e abra `http://127.0.0.1:5173`.
+No Windows, execute `./start.ps1` e abra `http://127.0.0.1:5174`.
+Na rede local, abra `http://<IP-do-servidor>:5174` (por exemplo, `http://172.18.1.43:5174`).
 A preparação do banco pode demorar alguns minutos; a página aguarda a API por
 até três minutos e oferece uma nova tentativa se ela ainda não estiver pronta.
 Mantenha o terminal aberto enquanto usa o aplicativo.
+
+Para os testes de acesso direto na rede, o `.env` usa `NODE_ENV=development`,
+`AUTH_MODE=local`, `HOST=0.0.0.0` e `AUTH_AUTO_LOGIN_CODE=` (vazio).
+Não há tela de login, senha ou 2FA nesse modo; os visitantes compartilham o
+workspace local. O acesso é pelo IP do servidor, na porta 5174 com `./start.ps1`
+ou na porta 4000 depois de `npm run build` e `npm start`.
+Para voltar a exigir login, altere para `AUTH_MODE=native` e reinicie o servidor.
+Mantenha `AUTH_AUTO_LOGIN_CODE` vazio para exigir a senha novamente.
 
 Em autenticação nativa, preserve `LUMINA_ENCRYPTION_KEY` junto ao backup do banco:
 substituir essa chave impede a leitura das identidades e dos segredos de 2FA já

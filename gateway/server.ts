@@ -21,7 +21,7 @@ const { app, ingestion, webImports } = createApp(store);
 void ingestion.resumeEmbeddings().catch(() => console.warn('Não foi possível retomar a indexação vetorial. A busca textual continua disponível.'));
 const server = app.listen(config.PORT, config.HOST, () => {
   console.log('LUMINA disponível em http://' + config.HOST + ':' + config.PORT);
-  console.log(config.AUTH_MODE === 'local' ? 'Modo local de desenvolvimento, sem autenticação. Não exponha à rede.' : 'Autenticação ' + config.AUTH_MODE + ' ativa · ' + store.storageName);
+  console.log(config.AUTH_MODE === 'local' ? 'Acesso direto para testes na rede local, sem autenticação.' : 'Autenticação ' + config.AUTH_MODE + ' ativa · ' + store.storageName);
 });
 let closing = false;
 async function shutdown() {
